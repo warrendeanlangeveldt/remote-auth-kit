@@ -30,7 +30,7 @@ const cleanups = [];
 async function session(env = {}) {
   const transport = new StdioClientTransport({
     command: 'node', args: ['server/local.js'],
-    env: { ...process.env, LOGIN_RELAY_PORT: String(PORT), EXTENSION_WAIT_SECONDS: '3', ...env },
+    env: { ...process.env, LOGIN_RELAY_PORT: String(PORT), EXTENSION_WAIT_SECONDS: '3', GUARD_AFTER_FILL_SECONDS: '1', ...env },
     stderr: 'pipe',
   });
   const client = new Client({ name: 'test', version: '0' });
@@ -48,7 +48,7 @@ async function fakeExtension({ url, ntfy, k, token = '' }) {
   const privateJwk = await crypto.subtle.exportKey('jwk', kp.privateKey);
   const topics = await topicsFor(k);
   const pending = new Map();
-  const state = { ws: null, fills: [], decrypted: null, closed: false, connects: 0 };
+  const state = { ws: null, fills: [], decrypted: null, closed: false, connects: 0, scriptRan: [], lastScriptAt: [], guarded: [] };
 
   const toPhone = async (msg) => publish(ntfy.url, topics.data, await seal(k, 'e2p', msg));
   const status = (id, s, detail) => state.ws?.readyState === 1 && state.ws.send(JSON.stringify({ type: 'status', id, status: s, detail }));
@@ -60,6 +60,8 @@ async function fakeExtension({ url, ntfy, k, token = '' }) {
     pending.delete(msg.id);
     if (msg.type === 'deny') { status(msg.id, 'denied', 'declined on phone'); return toPhone({ type: 'status', id: msg.id, status: 'denied' }); }
     status(msg.id, 'submitted');
+    state.ws?.send(JSON.stringify({ type: 'guard', id: msg.id, tab_id: 42 })); // about to fill tab 42
+    state.guarded.push(msg.id);
     state.decrypted = await decryptValues(privateJwk, msg.payload, msg.id, p.domain);
     state.fills.push(msg.id);
     status(msg.id, 'filled', `filled ${Object.keys(state.decrypted).join(', ')} and submitted`);
@@ -73,7 +75,9 @@ async function fakeExtension({ url, ntfy, k, token = '' }) {
     ws.on('message', async (raw) => {
       const m = JSON.parse(raw);
       if (m.type === 'welcome') { state.ws = ws; state.connects++; }
+      if (m.type === 'script_ran') state.scriptRan.push(m.at);
       if (m.type === 'login_request') {
+        state.lastScriptAt.push(m.last_script_at);
         pending.set(m.id, m);
         await toPhone({ type: 'request', id: m.id, domain: m.domain, fields: m.fields, note: m.note, expires_at: m.expires_at,
           context: { tab_url: 'https://appstoreconnect.apple.com/login', tab_title: 'App Store Connect', frame_host: 'idmsa.apple.com' } });
@@ -86,6 +90,8 @@ async function fakeExtension({ url, ntfy, k, token = '' }) {
   };
   connect();
   state.jwk = { kty: 'EC', crv: 'P-256', x: pub.x, y: pub.y };
+  // Tab 42 navigated: every page filled in it is gone.
+  state.tabNavigated = () => state.guarded.splice(0).forEach((id) => state.ws?.send(JSON.stringify({ type: 'guard_clear', id })));
   state.close = () => { state.closed = true; sub.close(); state.ws?.close(); };
   state.waitConnected = async (n = 1) => { for (let i = 0; i < 100 && state.connects < n; i++) await sleep(50); return state.connects >= n; };
   cleanups.push(state.close);
@@ -93,24 +99,43 @@ async function fakeExtension({ url, ntfy, k, token = '' }) {
 }
 
 // ---- phone stand-in: what phone/app.js does ----
-async function fakePhone({ link, action = 'submit', values = SECRET }) {
+async function fakePhone({ link, action = 'submit', values = SECRET, since = '1m' }) {
+  const held = [];
   const pairing = parsePairing(new URL(link).hash);
   const topics = await topicsFor(pairing.k);
   await publish(pairing.server, topics.data, await seal(pairing.k, 'p2e', { type: 'paired' }));
   const seen = { requests: [], statuses: [] };
-  const sub = subscribe(pairing.server, topics.data, '1m', async (text) => {
+  const sub = subscribe(pairing.server, topics.data, since, async (text) => {
     const msg = await unseal(pairing.k, 'e2p', text);
     if (!msg) return;
     if (msg.type === 'status') return seen.statuses.push(msg);
     if (msg.type !== 'request' || seen.requests.some((r) => r.id === msg.id)) return;
     seen.requests.push(msg);
     if (action === 'deny') return publish(pairing.server, topics.data, await seal(pairing.k, 'p2e', { type: 'deny', id: msg.id }));
+    if (action === 'hold') return held.push(msg); // you haven't answered yet
+    await answer(msg);
+  });
+  async function answer(msg) {
     const payload = await encryptValues(pairing.jwk, msg.id, msg.domain, values);
     await publish(pairing.server, topics.data, await seal(pairing.k, 'p2e', { type: 'submit', id: msg.id, payload }));
-  });
+  }
   cleanups.push(() => sub.close());
-  return { seen, close: () => sub.close() };
+  return { seen, held, answer, close: () => sub.close() };
 }
+
+// ---- the plugin's PreToolUse/PostToolUse hook, run as Claude Code runs it ----
+function hook(event, tool, toolInput, env = {}) {
+  return new Promise((resolve) => {
+    const p = spawn('node', ['hooks/guard.js'], { env: { ...process.env, LOGIN_RELAY_PORT: String(PORT), CLAUDE_PLUGIN_ROOT: '', ...env } });
+    let out = '';
+    p.stdout.on('data', (d) => (out += d));
+    p.on('close', () => resolve(out ? JSON.parse(out).hookSpecificOutput : null));
+    p.stdin.end(JSON.stringify({ hook_event_name: event, tool_name: tool, tool_input: toolInput }));
+  });
+}
+const pre = (tool, toolInput, env) => hook('PreToolUse', tool, toolInput, env);
+const denied = (r) => r?.permissionDecision === 'deny';
+const CHROME = (t) => `mcp__claude-in-chrome__${t}`;
 
 const ntfy = await startFakeNtfy();
 cleanups.push(ntfy.close);
@@ -187,6 +212,49 @@ try {
   assert(r4.status === 'denied', 'deny on the phone reaches Claude as denied');
   denier.close();
 
+  // ---------- the hook guard ----------
+  await sleep(1100); // let the guard from the fills above lapse (GUARD_AFTER_FILL_SECONDS=1)
+  assert((await pre(CHROME('javascript_tool'), { action: 'javascript_exec', tabId: 7, text: '1' })) === null, 'hook allows page scripts while no login is open');
+  for (let i = 0; i < 40 && !ext.scriptRan.length; i++) await sleep(50);
+  assert(ext.scriptRan.length === 1, 'hook reported the page script to the relay, which told the extension');
+  assert((await pre(CHROME('computer'), { action: 'screenshot', tabId: 7 })) === null, 'hook ignores tools that cannot read page memory');
+  const fromPage = await fetch(`http://127.0.0.1:${PORT}/script-ran`, { method: 'POST', headers: { origin: 'https://evil.example' } });
+  const guardFromPage = await fetch(`http://127.0.0.1:${PORT}/guard`, { headers: { origin: 'https://evil.example' } });
+  assert(fromPage.status === 404 && guardFromPage.status === 404, 'web pages cannot reach the hook endpoints');
+
+  denier.close();
+  const holder = await fakePhone({ link, action: 'hold', since: String(Math.floor(Date.now() / 1000)) }); // only requests from now on
+  const heldCall = s2.client.callTool({ name: 'request_login', arguments: { domain: 'apple.com', fields: ['password'] } });
+  for (let i = 0; i < 100 && !holder.held.length; i++) await sleep(50);
+  assert(ext.lastScriptAt.at(-1) >= ext.scriptRan[0], 'login request carries when Claude last ran a page script');
+  assert(denied(await pre(CHROME('javascript_tool'), { action: 'javascript_exec', tabId: 7, text: 'document.forms' })), 'hook refuses page scripts in any tab while a login is open');
+  assert(denied(await pre(CHROME('browser_batch'), { actions: [{ name: 'computer', input: { action: 'screenshot', tabId: 7 } }, { name: 'javascript_tool', input: { action: 'javascript_exec', tabId: 9, text: '1' } }] })), 'hook looks inside browser_batch');
+  assert(denied(await pre(CHROME('navigate'), { url: 'javascript:alert(1)', tabId: 7 })), 'hook refuses javascript: navigations');
+  assert(denied(await pre(CHROME('read_network_requests'), { tabId: 7 })), 'hook refuses reading network requests during a login');
+  assert((await pre(CHROME('read_page'), { tabId: 7 })) === null, 'hook still allows read_page and clicks during a login');
+  await holder.answer(holder.held[0]);
+  assert(toolJson(await heldCall).status === 'filled', 'held request filled once answered');
+  assert(denied(await pre(CHROME('javascript_tool'), { action: 'javascript_exec', tabId: 7, text: '1' })), 'right after a fill, page scripts stay refused in every tab');
+  await sleep(1300); // GUARD_AFTER_FILL_SECONDS=1 in these sessions
+  assert((await pre(CHROME('javascript_tool'), { action: 'javascript_exec', tabId: 7, text: '1' })) === null, 'later, other tabs are allowed again');
+  assert(denied(await pre(CHROME('javascript_tool'), { action: 'javascript_exec', tabId: 42, text: '1' })), 'the filled tab stays guarded until its page is replaced');
+  ext.tabNavigated();
+  await sleep(200);
+  assert((await pre(CHROME('javascript_tool'), { action: 'javascript_exec', tabId: 42, text: '1' })) === null, 'once the filled page is replaced, its tab is allowed again');
+  holder.close();
+
+  const osa = `osascript -e 'tell application "Google Chrome" to execute front window's active tab javascript "document.forms"'`;
+  assert(denied(await pre('Bash', { command: osa })), 'hook refuses scripting Chrome through AppleScript');
+  assert(denied(await pre('Bash', { command: 'open -a "Google Chrome" --args --remote-debugging-port=9222' })), "hook refuses opening Chrome's debugging port");
+  assert((await pre('Bash', { command: 'ls -la' })) === null, 'hook leaves ordinary shell commands alone');
+  assert((await pre('Bash', { command: `osascript -e 'return "javascript test"'` })) === null, 'hook leaves AppleScript that does not touch Chrome alone');
+  const installed = { CLAUDE_PLUGIN_ROOT: '/Users/me/.claude/plugins/cache/login-relay/login-relay/0.2.0' };
+  assert(denied(await pre('Edit', { file_path: `${installed.CLAUDE_PLUGIN_ROOT}/hooks/hooks.json` }, installed)), "hook refuses edits to the installed plugin's files");
+  assert(denied(await pre('Bash', { command: `sed -i '' d ~/.claude/plugins/cache/login-relay/login-relay/0.2.0/hooks/guard.js` }, installed)), "hook refuses shell commands touching the installed plugin's files");
+  assert((await pre('Edit', { file_path: '/Users/me/project/app.js' }, installed)) === null, 'hook leaves other edits alone');
+  assert((await pre('Edit', { file_path: `${process.cwd()}/hooks/guard.js` }, { CLAUDE_PLUGIN_ROOT: process.cwd() })) === null, 'a plugin loaded from a working folder stays editable');
+  assert((await pre(CHROME('javascript_tool'), { action: 'javascript_exec', tabId: 7, text: '1' }, { LOGIN_RELAY_PORT: String(PORT + 7) })) === null, 'with no relay running, page tools are allowed');
+
   // login_status for an unknown id
   const unknown = await s2.client.callTool({ name: 'login_status', arguments: { request_id: 'nope' } });
   assert(unknown.isError, 'login_status rejects unknown ids');
@@ -217,7 +285,7 @@ try {
   cleanups.push(() => hc.close().catch(() => {}));
   const hr = await hc.callTool({ name: 'request_login', arguments: { domain: 'apple.com', fields: ['password', 'otp'] } });
   assert(toolJson(hr).status === 'filled' && !toolText(hr).includes(SECRET.password), 'hosted mode: filled, no secret in the result');
-  assert(fills === 3, 'each approved request was filled exactly once');
+  assert(fills === 4, 'each approved request was filled exactly once');
 
   console.log('\nall passed');
 } finally {

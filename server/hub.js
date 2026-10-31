@@ -2,6 +2,12 @@
 // request store. It never sees a password or code: the phone encrypts them to
 // the extension's key and sends them through ntfy straight to the extension.
 // The hub only learns the status (filled, failed, denied, expired).
+//
+// It also keeps the guard state the plugin's PreToolUse hook (hooks/guard.js)
+// asks for: while a login is open, and until the filled page is replaced, Claude
+// in Chrome's page-script tools are refused. The hook reports every page script
+// Claude runs, and the extension refuses to fill a page that a script ran in
+// after it loaded.
 
 import crypto from 'node:crypto';
 import { WebSocketServer } from 'ws';
@@ -12,6 +18,10 @@ export const REQUEST_TTL_MS = seconds('REQUEST_TTL_SECONDS', 180);
 // extension's service worker to sleep and wakes it at least every 30 seconds.
 const EXTENSION_WAIT_MS = seconds('EXTENSION_WAIT_SECONDS', 40);
 const SUBMITTED_GRACE_MS = 60_000;
+// After a fill, every tab is guarded until the filled page is replaced or this
+// passes; the filled tab itself stays guarded until its page is replaced.
+const GUARD_ALL_AFTER_FILL_MS = seconds('GUARD_AFTER_FILL_SECONDS', 180);
+const GUARD_TAB_MAX_MS = 60 * 60_000;
 
 // status: pending_extension -> awaiting_user -> submitted -> filled | failed
 //         (or denied | expired at any point)
@@ -45,6 +55,8 @@ export function createRelay({ log = console.error } = {}) {
   const requests = new Map();
   let ext = null; // WebSocket of the connected extension
   const extWaiters = new Set();
+  const guards = new Map(); // request id -> { domain, tabId, allUntil, tabUntil }
+  let lastScriptAt = 0; // when Claude last ran a script in a page (reported by the hook)
 
   function update(r, patch) {
     Object.assign(r, patch);
@@ -77,6 +89,7 @@ export function createRelay({ log = console.error } = {}) {
       }
       if (now - r.createdAt > 15 * 60_000) requests.delete(r.id);
     }
+    for (const [id, g] of guards) if (now > g.tabUntil) guards.delete(id);
   }, 1000);
   sweep.unref();
 
@@ -99,7 +112,7 @@ export function createRelay({ log = console.error } = {}) {
     }
     sendExt({
       type: 'login_request', id: r.id, domain: r.domain, fields: r.fields,
-      note: r.note, submit: r.submit, expires_at: r.expiresAt,
+      note: r.note, submit: r.submit, expires_at: r.expiresAt, last_script_at: lastScriptAt,
     });
     return view(r);
   }
@@ -118,18 +131,51 @@ export function createRelay({ log = console.error } = {}) {
     });
   }
 
+  function guardFor(r) {
+    const now = Date.now();
+    const g = guards.get(r.id) || { domain: r.domain, tabId: null };
+    guards.set(r.id, { ...g, allUntil: now + GUARD_ALL_AFTER_FILL_MS, tabUntil: now + GUARD_TAB_MAX_MS });
+    return guards.get(r.id);
+  }
+
   function onExtMessage(msg) {
     const r = msg?.id ? requests.get(msg.id) : null;
-    if (msg?.type !== 'status' || !r || TERMINAL.has(r.status) || !FROM_EXTENSION.has(msg.status)) return;
+    if (!r) return;
+    // The extension is about to put a value into this tab (or has).
+    if (msg.type === 'guard') { guardFor(r).tabId = Number.isInteger(msg.tab_id) ? msg.tab_id : null; return; }
+    // The page that held the value is gone, or no value reached it.
+    if (msg.type === 'guard_clear') { guards.delete(r.id); return; }
+    if (msg.type !== 'status' || TERMINAL.has(r.status) || !FROM_EXTENSION.has(msg.status)) return;
     const patch = { status: msg.status, detail: msg.detail ? String(msg.detail).slice(0, 300) : null };
-    if (msg.status === 'submitted') patch.expiresAt = Date.now() + SUBMITTED_GRACE_MS;
+    if (msg.status === 'submitted') { patch.expiresAt = Date.now() + SUBMITTED_GRACE_MS; guardFor(r); }
     update(r, patch);
+  }
+
+  // What the hook enforces. While any request is open, or a filled page may still
+  // hold the value, page scripts are refused in every tab; after that, only in
+  // the filled tab until its page is replaced.
+  function guardState() {
+    const now = Date.now();
+    const open = [...requests.values()].filter((r) => !TERMINAL.has(r.status));
+    const live = [...guards.values()].filter((g) => now <= g.tabUntil);
+    const all = open.length > 0 || live.some((g) => now <= g.allUntil);
+    return {
+      block_all: all,
+      tab_ids: [...new Set(live.map((g) => g.tabId).filter((t) => t != null))],
+      domains: [...new Set([...open.map((r) => r.domain), ...live.map((g) => g.domain)])],
+    };
+  }
+
+  function scriptRan(at = Date.now()) {
+    lastScriptAt = Math.max(lastScriptAt, at);
+    sendExt({ type: 'script_ran', at: lastScriptAt });
   }
 
   function attachExtension(ws) {
     if (ext && ext !== ws) ext.close(4000, 'replaced by newer connection');
     ext = ws;
     log('extension connected');
+    if (lastScriptAt) sendExt({ type: 'script_ran', at: lastScriptAt });
     [...extWaiters].forEach((w) => w(true));
     ws.on('close', () => {
       if (ext === ws) { ext = null; log('extension disconnected'); }
@@ -141,6 +187,8 @@ export function createRelay({ log = console.error } = {}) {
     wait,
     onExtMessage,
     attachExtension,
+    guardState,
+    scriptRan,
     extensionConnected: () => !!ext,
     close: () => clearInterval(sweep),
   };

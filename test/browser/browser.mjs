@@ -4,7 +4,7 @@
 //   Claude (MCP) -> relay -> extension finds the tab -> ntfy -> phone page
 //   -> you type the password -> ntfy -> extension decrypts, fills, submits -> status.
 // Run with: npm run test:browser (from the repo root).
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, existsSync } from 'node:fs';
 import https from 'node:https';
 import path from 'node:path';
@@ -34,6 +34,7 @@ const tls = { key: readFileSync(path.join(certDir, 'key.pem')), cert: readFileSy
 
 // ---------- test login site + the phone page, on one https server ----------
 const recorded = [];
+const phoneServing = { tamper: false }; // true: serve a modified phone page, as if its host were compromised
 const LOGIN_PAGE = `<!doctype html><title>Test Login</title>
 <form id="pw"><input name="email" value="me@example.com"><input type="password" name="password"><button>Sign in</button></form>
 <script>
@@ -54,6 +55,17 @@ const LOGIN_PAGE = `<!doctype html><title>Test Login</title>
     });
   });
 </script>`;
+// A plain HTML form, and a script that checks the password field on every task
+// it can get. If the fill and the clear happen in one step, it never sees the value.
+const CLASSIC_PAGE = `<!doctype html><title>Classic Login</title>
+<form method="post" action="/classic-done"><input name="email" value="me@example.com"><input type="password" name="password"><button>Sign in</button></form>
+<script>
+  sessionStorage.removeItem('saw');
+  const pw = document.querySelector('[name=password]');
+  const ch = new MessageChannel();
+  ch.port1.onmessage = () => { if (pw.value) sessionStorage.setItem('saw', '1'); ch.port2.postMessage(0); };
+  ch.port2.postMessage(0);
+</script>`;
 const site = https.createServer(tls, (req, res) => {
   const url = new URL(req.url, 'https://x');
   if (req.method === 'POST' && url.pathname === '/record') {
@@ -61,12 +73,24 @@ const site = https.createServer(tls, (req, res) => {
     req.on('data', (c) => (b += c));
     return req.on('end', () => { recorded.push(JSON.parse(b)); res.end('{}'); });
   }
+  if (req.method === 'POST' && url.pathname === '/classic-done') {
+    let b = '';
+    req.on('data', (c) => (b += c));
+    return req.on('end', () => {
+      recorded.push({ classic: new URLSearchParams(b).get('password') });
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end('<!doctype html><title>Signed in</title>');
+    });
+  }
+  if (url.pathname === '/classic') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end(CLASSIC_PAGE); }
   if (url.pathname.startsWith('/phone/')) {
     const file = path.join(root, 'phone', url.pathname.slice('/phone/'.length) || 'index.html');
     if (!file.startsWith(path.join(root, 'phone')) || !existsSync(file)) { res.writeHead(404); return res.end(); }
     const type = { '.html': 'text/html', '.js': 'text/javascript', '.webmanifest': 'application/manifest+json' }[path.extname(file)];
-    res.writeHead(200, { 'content-type': type });
-    return res.end(readFileSync(file));
+    // GitHub Pages sends this too; the extension fetches the files to check them.
+    res.writeHead(200, { 'content-type': type, 'access-control-allow-origin': '*' });
+    const body = readFileSync(file);
+    return res.end(phoneServing.tamper && file.endsWith('app.js') ? Buffer.concat([body, Buffer.from('\n// changed\n')]) : body);
   }
   res.writeHead(200, { 'content-type': 'text/html' });
   res.end(LOGIN_PAGE);
@@ -76,6 +100,7 @@ cleanups.push(() => site.close());
 const SITE_PORT = site.address().port;
 // Pages other than the front tab get no animation frames in headless Chrome, so every wait polls on an interval.
 const LOGIN_URL = `https://login.relay.test:${SITE_PORT}/signin`;
+const CLASSIC_URL = `https://login.relay.test:${SITE_PORT}/classic`;
 const APPROVE_URL = `https://phone.approve.test:${SITE_PORT}/phone/`;
 
 const ntfy = await startFakeNtfy({ tls, host: 'ntfy.relay.test' });
@@ -84,15 +109,28 @@ cleanups.push(ntfy.close);
 // ---------- Claude Code's side: the plugin's MCP server over stdio ----------
 const transport = new StdioClientTransport({
   command: 'node', args: [path.join(root, 'server', 'local.js')],
-  env: { ...process.env, LOGIN_RELAY_PORT: String(RELAY_PORT) }, stderr: 'inherit',
+  env: { ...process.env, LOGIN_RELAY_PORT: String(RELAY_PORT), GUARD_AFTER_FILL_SECONDS: '1' }, stderr: 'inherit',
 });
 const claude = new Client({ name: 'browser-test', version: '0' });
 await claude.connect(transport);
 cleanups.push(() => claude.close());
-const requestLogin = async (args) => {
+let sw = null;
+// Each step here is a separate login, so the rate limit is reset unless a step tests it.
+const requestLogin = async (args, { keepRateLimit = false } = {}) => {
+  if (sw && !keepRateLimit) await sw.evaluate(() => chrome.storage.local.remove('sentLog'));
   const r = await claude.callTool({ name: 'request_login', arguments: args }, undefined, { timeout: 150_000 });
   return { text: r.content[0].text, ...JSON.parse(r.content[0].text) };
 };
+
+// The plugin's hook, as Claude Code would run it before a Claude in Chrome tool call.
+const hook = (tool, toolInput, event = 'PreToolUse') => new Promise((resolve) => {
+  const p = spawn('node', [path.join(root, 'hooks', 'guard.js')], { env: { ...process.env, LOGIN_RELAY_PORT: String(RELAY_PORT) } });
+  let out = '';
+  p.stdout.on('data', (d) => (out += d));
+  p.on('close', () => resolve(out ? JSON.parse(out).hookSpecificOutput?.permissionDecision : 'allow'));
+  p.stdin.end(JSON.stringify({ hook_event_name: event, tool_name: `mcp__claude-in-chrome__${tool}`, tool_input: toolInput }));
+});
+const jsTool = (tabId) => hook('javascript_tool', { action: 'javascript_exec', tabId, text: '1' });
 
 // ---------- Chrome with the real extension ----------
 const browser = await puppeteer.launch({
@@ -109,10 +147,10 @@ cleanups.push(() => browser.close());
 try {
   const swTarget = await browser.waitForTarget((t) => t.type() === 'service_worker' && t.url().endsWith('/background.js'));
   const extId = new URL(swTarget.url()).host;
-  const sw = await swTarget.worker();
+  sw = await swTarget.worker();
   if (process.env.DEBUG) sw.on('console', (m) => console.log(new Date().toISOString().slice(17, 23), '[extension]', m.text()));
   await sw.evaluate((cfg) => chrome.storage.local.set(cfg), {
-    relayUrl: `ws://127.0.0.1:${RELAY_PORT}`, allowedDomains: 'relay.test', ntfyServer: ntfy.url, approveUrl: APPROVE_URL,
+    relayUrl: `ws://127.0.0.1:${RELAY_PORT}`, allowedDomains: 'login.relay.test', ntfyServer: ntfy.url, approveUrl: APPROVE_URL,
   });
 
   // Options page: the user's view of the extension.
@@ -199,11 +237,109 @@ try {
 
   // ---- domain outside the allowlist ----
   const blocked = await requestLogin({ domain: 'other.test', fields: ['password'] });
-  assert(blocked.status === 'failed' && /allowed domains/.test(blocked.detail), 'refuses domains outside the allowlist');
+  assert(blocked.status === 'failed' && /allowed sites/.test(blocked.detail), 'refuses domains outside the allowlist');
 
   // ---- no matching field open ----
   const none = await requestLogin({ domain: 'relay.test', fields: ['password'] });
   assert(none.status === 'failed' && /no open tab/.test(none.detail), 'reports when no tab shows the field');
+
+  const tabIdOf = (url) => sw.evaluate(async (u) => (await chrome.tabs.query({})).find((t) => t.url.startsWith(u))?.id, url);
+  async function denyOnPhone() {
+    await phone.bringToFront();
+    await phone.waitForFunction(() => document.querySelector('.card button.secondary:not([disabled])'), { timeout: 20000, polling: 100 });
+    await phone.click('.card button.secondary:not([disabled])');
+  }
+
+  // ---- exact hostnames: a subdomain that isn't listed is refused ----
+  await tab.goto(`https://shared.relay.test:${SITE_PORT}/signin`);
+  const shared = await requestLogin({ domain: 'relay.test', fields: ['password'] });
+  assert(shared.status === 'failed' && /shared\.relay\.test, which isn't in/.test(shared.detail), 'refuses a subdomain that is not listed exactly, and says which host to add');
+
+  // ---- a page script ran after the login page loaded ----
+  await tab.goto(LOGIN_URL);
+  const loginTab = await tabIdOf(LOGIN_URL);
+  assert((await jsTool(loginTab)) === 'allow', 'hook allows a page script while no login is open');
+  await tab.evaluate(() => { window.watcher = setInterval(() => {}, 100); }); // what that script could leave behind
+  const watched = await requestLogin({ domain: 'relay.test', fields: ['password'] });
+  assert(watched.status === 'failed' && /ran a script/.test(watched.detail), 'refuses to fill a page a script ran in after it loaded');
+  await tab.reload();
+  const reloadedCall = requestLogin({ domain: 'relay.test', fields: ['password'] });
+  await denyOnPhone();
+  assert((await reloadedCall).status === 'denied', 'after a reload the request reaches the phone again');
+
+  // ---- the hook guard, with real Chrome tab ids ----
+  const guardedCall = requestLogin({ domain: 'relay.test', fields: ['password'] });
+  await phone.bringToFront();
+  await phone.waitForFunction(() => [...document.querySelectorAll('.card input')].some((i) => !i.disabled), { timeout: 20000, polling: 100 });
+  assert((await jsTool(loginTab)) === 'deny' && (await jsTool(99999)) === 'deny', 'while a login is open, page scripts are refused in every tab');
+  await approveOnPhone('Password', SECRET.password);
+  assert((await guardedCall).status === 'filled', 'filled while the guard was on');
+  await sleep(1300); // GUARD_AFTER_FILL_SECONDS=1 for this test
+  assert((await jsTool(99999)) === 'allow', 'after the fill, other tabs are allowed again');
+  assert((await jsTool(loginTab)) === 'deny', 'the filled tab stays guarded while the same page is loaded');
+  await tab.goto(LOGIN_URL);
+  await sleep(300);
+  assert((await jsTool(loginTab)) === 'allow', 'a new page in that tab lifts the guard');
+  await tab.reload(); // the script just allowed counts as having run in the old page only
+
+  // ---- plain HTML form: fill, submit and clear in one step ----
+  await tab.goto(CLASSIC_URL);
+  const classicCall = requestLogin({ domain: 'relay.test', fields: ['password'] });
+  await approveOnPhone('Password', SECRET.password);
+  assert((await classicCall).status === 'filled', 'plain form filled and submitted');
+  await tab.waitForFunction(() => document.title === 'Signed in', { polling: 100 });
+  assert(recorded.some((r) => r.classic === SECRET.password), 'site received the password in the form post');
+  assert(await tab.evaluate(() => sessionStorage.getItem('saw') === null), 'a script watching the page never saw the password in the field');
+
+  // ---- one request at a time ----
+  await tab.goto(LOGIN_URL);
+  const firstCall = requestLogin({ domain: 'relay.test', fields: ['password'] });
+  await phone.bringToFront();
+  await phone.waitForFunction(() => document.querySelector('.card button.secondary:not([disabled])'), { timeout: 20000, polling: 100 });
+  const second = await requestLogin({ domain: 'relay.test', fields: ['password'] });
+  assert(second.status === 'failed' && /another login request/.test(second.detail), 'a second request is refused while one is waiting');
+  await phone.click('.card button.secondary:not([disabled])');
+  assert((await firstCall).status === 'denied', 'the first request is unaffected');
+
+  // ---- deny and pause from the phone ----
+  const pauseCall = requestLogin({ domain: 'relay.test', fields: ['password'] });
+  await phone.bringToFront();
+  await phone.waitForFunction(() => document.querySelector('.card button.pause:not([disabled])'), { timeout: 20000, polling: 100 });
+  await phone.click('.card button.pause:not([disabled])');
+  assert((await pauseCall).status === 'denied', 'deny and pause denies the request');
+  await phone.waitForFunction(() => document.body.innerText.includes('Login requests are paused until'), { polling: 100 });
+  await sw.evaluate(() => new Promise((r) => { const t = setInterval(async () => { if ((await chrome.storage.local.get('pausedUntil')).pausedUntil > Date.now()) { clearInterval(t); r(); } }, 100); }));
+  const cards = await phone.evaluate(() => document.querySelectorAll('.card input').length);
+  const whilePaused = await requestLogin({ domain: 'relay.test', fields: ['password'] });
+  assert(whilePaused.status === 'failed' && /paused/.test(whilePaused.detail), 'requests are refused while paused');
+  await sleep(500);
+  assert((await phone.evaluate(() => document.querySelectorAll('.card input').length)) === cards, 'nothing reached the phone while paused');
+  await options.waitForFunction(() => !document.getElementById('paused').hidden, { polling: 100 });
+  assert(true, 'options page shows the pause');
+  await phone.click('button.resume');
+  await sw.evaluate(() => new Promise((r) => { const t = setInterval(async () => { if (!(await chrome.storage.local.get('pausedUntil')).pausedUntil) { clearInterval(t); r(); } }, 100); }));
+  const resumedCall = requestLogin({ domain: 'relay.test', fields: ['password'] });
+  await denyOnPhone();
+  assert((await resumedCall).status === 'denied', 'resume on the phone lets requests through again');
+
+  // ---- rate limit ----
+  await sw.evaluate(() => chrome.storage.local.set({ sentLog: Array(6).fill(Date.now()) }));
+  const limited = await requestLogin({ domain: 'relay.test', fields: ['password'] }, { keepRateLimit: true });
+  assert(limited.status === 'failed' && /too many login requests/.test(limited.detail), 'refuses more than 6 requests in 15 minutes');
+
+  // ---- the approval page changed ----
+  phoneServing.tamper = true;
+  const pushesBefore = ntfy.messages.length;
+  const tampered = await requestLogin({ domain: 'relay.test', fields: ['password'] });
+  assert(tampered.status === 'failed' && /approval page .* has changed/.test(tampered.detail), 'refuses to use an approval page whose code changed');
+  const sinceTamper = ntfy.messages.slice(pushesBefore);
+  assert(sinceTamper.length === 1 && sinceTamper[0].headers.title === 'Login Relay warning', 'warns on the phone, and sends no request');
+  await options.waitForFunction(() => !document.getElementById('pageWarning').hidden, { polling: 100 });
+  assert(true, 'options page shows the approval page warning');
+  phoneServing.tamper = false;
+  const restoredCall = requestLogin({ domain: 'relay.test', fields: ['password'] });
+  await denyOnPhone();
+  assert((await restoredCall).status === 'denied', 'once the page is back to a trusted version, requests go through');
 
   const all = ntfy.messages.map((m) => m.message).join('\n');
   assert(!all.includes(SECRET.password) && !all.includes(SECRET.otp), 'ntfy never saw a password or code');

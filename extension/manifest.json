@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Login Relay",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Fills logins you approve on your phone into this Chrome. Values are end-to-end encrypted to this extension; Claude never receives them.",
   "minimum_chrome_version": "120",
   "background": { "service_worker": "background.js", "type": "module" },

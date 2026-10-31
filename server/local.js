@@ -35,10 +35,14 @@ function getRelay() {
 function becomeHub() {
   return new Promise((resolve, reject) => {
     const relay = createRelay({ log });
+    const json = (res, v) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(v)); };
     const server = http.createServer((req, res) => {
-      if (req.url === '/healthz') {
-        res.writeHead(200, { 'content-type': 'application/json' });
-        return res.end(JSON.stringify({ ok: true, extension_connected: relay.extensionConnected() }));
+      if (req.url === '/healthz') return json(res, { ok: true, extension_connected: relay.extensionConnected() });
+      // For hooks/guard.js only. Browsers always send an Origin header on these
+      // requests, so requiring none keeps web pages from reading or setting them.
+      if (req.headers.origin === undefined) {
+        if (req.method === 'GET' && req.url === '/guard') return json(res, relay.guardState());
+        if (req.method === 'POST' && req.url === '/script-ran') { relay.scriptRan(); return res.writeHead(204).end(); }
       }
       res.writeHead(404).end();
     });

@@ -9,7 +9,7 @@ import { z } from 'zod';
 const TOOL_WAIT_MS = Number(process.env.TOOL_WAIT_SECONDS || 100) * 1000;
 
 export function buildMcp(getRelay) {
-  const server = new McpServer({ name: 'login-relay', version: '0.2.0' });
+  const server = new McpServer({ name: 'login-relay', version: '0.3.0' });
   const text = (v) => ({ content: [{ type: 'text', text: JSON.stringify(v) }] });
   const error = (message) => ({ isError: true, content: [{ type: 'text', text: message }] });
 
@@ -23,7 +23,9 @@ export function buildMcp(getRelay) {
         'The user gets a phone notification showing the domain and the exact tab the Login Relay extension found, enters the value on their phone, ' +
         'and the extension fills it (and submits by default) directly in the page. You never receive the values; the result is only a status. ' +
         'Call once per step (e.g. password, then again for the 2FA code). If the status is still awaiting_user or submitted, call login_status. ' +
-        'Never ask the user to type passwords or codes into the chat, and do not read password fields back out of the page.',
+        'Never ask the user to type passwords or codes into the chat, and do not read password fields back out of the page. ' +
+        'Do not run JavaScript on the login page: the extension refuses to fill a page a script ran in after it loaded (reload it and ask again), ' +
+        'and page-script tools are paused while a login is in progress. If the result says requests are paused or rate-limited, stop and tell the user rather than retrying.',
       inputSchema: {
         domain: z.string().describe('Registrable domain of the login page, e.g. "apple.com" for appstoreconnect.apple.com / idmsa.apple.com'),
         fields: z.array(z.enum(['password', 'otp'])).min(1).describe('Which fields are visible on the current step'),

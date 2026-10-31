@@ -18,14 +18,24 @@ Claude Code ◄── {"status":"filled"} ◄── relay ◄── status only 
 
 ## What it protects, and what it doesn't
 
+Your password goes from your phone to the login page, and nowhere else in readable form. Nothing fills without you approving it on your phone.
+
 - Claude's tool result has no field a secret could travel in. It gets `filled`, `failed`, `denied` or `expired`, with a short reason.
 - The phone encrypts each value to the extension's own key (ECDH P-256, HKDF, AES-GCM, bound to the request ID and domain). The extension's public key is pinned on the phone when you pair, so a changed key can't slip in later.
 - Every message on ntfy is also sealed with the pairing key that only your phone and the extension hold. Without it nobody can read the requests (including the tab URL) or forge an answer.
-- The extension decides where to fill. It only fills on domains you allowlist, only in the tab and frame it found and showed you, and it checks the tab is still on that domain right before filling.
-- Each request expires after 3 minutes and can be filled once.
-- After submitting, the extension clears the password from the page's DOM within about 1.5 seconds, and wipes any password field still filled after 8 seconds (for example, after a wrong password).
+- The extension decides where to fill. It only fills on the exact hostnames you allow, only in the tab and frame it found and showed you, and it checks that frame is still on the same host right before filling.
+- Each request expires after 3 minutes and can be filled once. Only one request waits on your phone at a time, and at most 6 reach it in any 15 minutes.
+- On a plain HTML login form, the extension fills, submits and clears the field in one step, so nothing else on the page ever sees the field with the password in it. Where the site's own script handles the submit, the field is cleared after about 1.5 seconds, once the script has read it.
 
-There is one gap you should know about. Once the password is in the page, Claude in Chrome can read the field's value with JavaScript until the page submits and the field is cleared. A Claude that was manipulated by content on a web page could do that in the short window. The guarantee is that Claude never receives the secret from this tool, and that the window in which the page holds it is short. If that window is not acceptable for a site, don't allowlist that site.
+The page itself is where the risk sits. The password has to be in the page for the site to receive it, and Claude in Chrome can run scripts in pages. A Claude that was manipulated by something it read on a web page could try to read the field, or leave a script on the login page to catch the value when it arrives. The plugin closes that off in three ways:
+
+- The plugin's hook (`hooks/guard.js`) runs before every Claude in Chrome tool call. While a login is open, and until the filled page is replaced, it refuses the tools that can run scripts in a page or read its network requests, in every tab. After 3 minutes it narrows to the filled tab, which stays guarded until that page is replaced. Clicks, typing, `read_page` and screenshots still work, and password fields show as dots in screenshots.
+- The hook records every page script Claude runs, and the extension won't fill a page that a script ran in after it loaded. Claude has to reload the login page and ask again, which clears anything a script left behind.
+- The hook also refuses the obvious ways round it: scripting Chrome through AppleScript, opening Chrome's debugging port, and editing the installed plugin's own files.
+
+The approval page on your phone is the other thing you have to trust. Whoever controls its code could change it to send your password elsewhere. The extension ships with the SHA-256 digests of the approval page versions it trusts, and checks the published page against them before every request and every 6 hours. If the page has changed, it refuses logins and sends your phone a warning not to type passwords into it. GitHub Pages serves the same files to everyone, so a changed page can't show the extension one version and your phone another. A self-hosted page could, which is one reason to keep the default unless you run your own copy end to end.
+
+What's left: the hook only runs in Claude Code, so it doesn't guard Claude in Chrome driven from claude.ai or the desktop app (which can't use the local plugin anyway). On sites whose own script keeps the password in memory after submitting, that memory is only cleared when the page is replaced. The filled tab stays guarded until then, but that part of the guard assumes Claude in Chrome uses the same Chrome tab IDs as this extension. Both are extensions in the same browser, so they should, but the tests can't run Claude in Chrome to confirm it. The shell checks match command text, so they stop the obvious routes rather than every possible one.
 
 ## Requirements
 
@@ -49,7 +59,7 @@ The relay starts with your Claude Code session and listens on `127.0.0.1:47823`.
 
 Download or clone this repository, then in Chrome go to `chrome://extensions`, turn on Developer mode, choose **Load unpacked**, and pick the `extension/` folder.
 
-Open the extension's options and set **Allowed domains**, such as `apple.com, github.com`. Logins are only filled on these domains and their subdomains.
+Open the extension's options and set **Allowed sites**: the exact hostnames that show the login fields, such as `idmsa.apple.com, github.com`. If you aren't sure which host a site uses, ask for a login anyway: the failure names the host to add. `*.apple.com` allows apple.com and every subdomain, which is only safe where nobody else can host pages on a subdomain. `*.google.com`, for example, includes sites.google.com, where anyone can publish a page.
 
 The phone approval page defaults to the copy published from this repository at `https://warrendeanlangeveldt.github.io/login-relay/`. To use your own copy instead, see "Publishing your own approval page" below.
 
@@ -66,9 +76,15 @@ Then do two things on the phone:
 
 Choosing Reset pairing makes a new key, and the old phone stops working until it scans the new code.
 
+If requests start arriving that you didn't expect, tap "Deny and pause requests for an hour" on the phone. The extension refuses new requests until then without notifying you, and Claude is told to stop and tell you. Resume early from the banner on the phone or from the extension's options.
+
 ### Publishing your own approval page
 
-Whoever controls the approval page's JavaScript could change it to send your password elsewhere. If you'd rather not trust the default copy, publish `phone/` yourself. It's a static page with no backend, so any HTTPS host works. In a fork on GitHub, turn on Settings → Pages → Source: GitHub Actions, and `.github/workflows/phone-page.yml` deploys it on every push that changes `phone/`. Then set the extension's Phone approval page URL to your copy and pair again.
+Whoever controls the approval page's JavaScript could change it to send your password elsewhere. If you'd rather not trust the default copy, publish `phone/` yourself. It's a static page with no backend, so any HTTPS host works. In a fork on GitHub, turn on Settings → Pages → Source: GitHub Actions, and `.github/workflows/phone-page.yml` deploys it on every push that changes `phone/`. Then set the extension's Phone approval page URL to your copy and pair again. The extension checks your copy against the same digests, so publish `phone/` unchanged, or change it and load the extension from your fork after running `npm run build`.
+
+### Changing the phone page
+
+`npm run build` adds the digest of the current `phone/` files to `extension/lib/phone-pins.js`, keeping the last few, and `npm test` fails if it's missing. Extensions people already have only trust the versions they shipped with, so release the extension with the new pin first and publish the changed page after it has rolled out. Publishing the page first makes every installed extension refuse logins until it updates.
 
 ## How a login goes
 
@@ -85,7 +101,8 @@ Taking App Store Connect as the example:
 - The computer must be on with Chrome open and a Claude Code session running.
 - The fill rules cover standard password fields, `one-time-code` fields, and split one-box-per-digit code inputs. Unusual login pages may need a site-specific rule in `pageAgent()` in `extension/background.js`. For those, Chrome Remote Desktop from your phone is a workable fallback.
 - Passkeys need you at the computer, so Login Relay can't help with them.
-- `host_permissions` is `https://*/*` so you can change the allowlist without reinstalling. Narrow it in `extension/manifest.json` if you prefer.
+- `host_permissions` is `https://*/*` so you can change the allowed sites without reinstalling. Narrow it in `extension/manifest.json` if you prefer.
+- With a hosted relay (below), the hook can't see the relay, so the script guard doesn't apply. The exact-host, page-pin and rate checks in the extension still do.
 
 ## claude.ai and the Claude mobile app (optional)
 
@@ -108,6 +125,18 @@ npm test               # protocol: Claude Code sessions, relay hand-over, ntfy, 
 npm run test:browser   # the real extension and phone page in Chrome for Testing, against a test login site
 ```
 
-`npm test` drives the relay exactly as Claude Code starts it, with a second session sharing it and taking over when the first ends. It checks that neither the tool result nor anything sent to ntfy contains a secret. `npm run test:browser` downloads Chrome for Testing into `test/browser/.cache/` and runs the full flow: pairing by QR link, a password fill through the site's own submit handler, a split 6-digit code, deny, a tab that navigates away before you answer, and a domain outside the allowlist.
+`npm test` drives the relay exactly as Claude Code starts it, with a second session sharing it and taking over when the first ends. It runs the hook as Claude Code does, before and during a login, and checks that neither the tool result nor anything sent to ntfy contains a secret.
 
-After changing `extension/lib/relay-crypto.js`, run `npm run build` to copy it to `phone/`. `npm test` fails if the copy is out of date.
+`npm run test:browser` downloads Chrome for Testing into `test/browser/.cache/` and runs the real extension and phone page against a test login site:
+
+- pairing by QR link
+- a password filled through the site's own submit handler, and a split 6-digit code
+- a plain HTML form where a script polling the field never sees the password
+- deny, deny and pause, resume, one request at a time, and the rate limit
+- a tab that navigates away before you answer
+- an unlisted subdomain
+- a page a script ran in after it loaded
+- the hook guard with real tab IDs
+- a changed approval page
+
+After changing `extension/lib/relay-crypto.js` or anything in `phone/`, run `npm run build`. `npm test` fails if a copy or the phone page pin is out of date.

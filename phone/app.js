@@ -5,6 +5,8 @@
 import { parsePairing, topicsFor, seal, unseal, encryptValues, publish, subscribe } from './relay-crypto.js';
 
 const PAIR_KEY = 'loginRelayPairing';
+const PAUSE_KEY = 'loginRelayPausedUntil';
+const PAUSE_SECONDS = 3600;
 const TERMINAL = new Set(['filled', 'failed', 'denied', 'expired']);
 const app = document.getElementById('app');
 const footer = document.getElementById('footer');
@@ -32,6 +34,23 @@ function showUnpaired(msg) {
   footer.replaceChildren();
 }
 
+// "Deny and pause": the extension refuses new requests until then, without
+// notifying you. The banner lets you resume early.
+const pauseBanner = el('div', { class: 'card', hidden: '' });
+function showPause(send) {
+  const until = Number(localStorage.getItem(PAUSE_KEY) || 0);
+  if (until <= Date.now()) { pauseBanner.hidden = true; return; }
+  const at = new Date(until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  pauseBanner.replaceChildren(
+    el('div', {}, `Login requests are paused until ${at}.`),
+    el('div', { class: 'btns' }, el('button', { class: 'plain resume', onclick: async () => {
+      localStorage.removeItem(PAUSE_KEY);
+      showPause(send);
+      await send({ type: 'resume' }).catch(() => {});
+    } }, 'Resume now')));
+  pauseBanner.hidden = false;
+}
+
 const statuses = new Map(); // id -> { status, detail }
 const cards = new Map(); // id -> { el, sent, finish }
 
@@ -41,7 +60,7 @@ function emptyState() {
   if (live) app.querySelector('.empty')?.remove();
 }
 
-function buildCard(pairing, topics, r) {
+function buildCard(pairing, topics, r, send) {
   const inputs = {};
   const fieldEls = r.fields.flatMap((f) => {
     const i = f === 'password'
@@ -55,6 +74,7 @@ function buildCard(pairing, topics, r) {
   const expiry = el('div', { class: 'muted' });
   const sendBtn = el('button', { class: 'primary' }, 'Send to browser');
   const denyBtn = el('button', { class: 'secondary' }, 'Deny');
+  const pauseBtn = el('button', { class: 'plain pause' }, 'Deny and pause requests for an hour');
   const card = el('div', { class: 'card' },
     el('div', { class: 'muted' }, 'Claude wants to sign in to'),
     el('div', { class: 'domain' }, r.domain),
@@ -63,12 +83,12 @@ function buildCard(pairing, topics, r) {
     r.context?.tab_title ? el('div', { class: 'row' }, el('b', {}, 'Title: '), r.context.tab_title) : null,
     el('div', { class: 'row' }, el('b', {}, 'Field found in: '), r.context?.frame_host || '?'),
     ...fieldEls,
-    el('div', { class: 'btns' }, denyBtn, sendBtn), status, expiry);
+    el('div', { class: 'btns' }, denyBtn, sendBtn), el('div', { class: 'btns' }, pauseBtn), status, expiry);
 
   const entry = { el: card, sent: false, done: false };
   let noAnswer = null;
   const lock = () => {
-    sendBtn.disabled = denyBtn.disabled = true;
+    sendBtn.disabled = denyBtn.disabled = pauseBtn.disabled = true;
     Object.values(inputs).forEach((i) => { i.value = ''; i.disabled = true; });
     clearInterval(tick);
     expiry.textContent = '';
@@ -86,13 +106,11 @@ function buildCard(pairing, topics, r) {
     if (s === 0 && !entry.sent) entry.finish('Expired', 'bad');
   }, 1000);
 
-  const send = async (msg) => publish(pairing.server, topics.data, await seal(pairing.k, 'p2e', msg));
-
   sendBtn.addEventListener('click', async () => {
     const values = {};
     for (const f of r.fields) { const v = inputs[f].value; if (!v) { inputs[f].focus(); return; } values[f] = v; }
     entry.sent = true;
-    sendBtn.disabled = denyBtn.disabled = true;
+    sendBtn.disabled = denyBtn.disabled = pauseBtn.disabled = true;
     try {
       const payload = await encryptValues(pairing.jwk, r.id, r.domain, values);
       for (const k in values) values[k] = '';
@@ -109,6 +127,14 @@ function buildCard(pairing, topics, r) {
     entry.finish('Denied', 'bad');
     await send({ type: 'deny', id: r.id }).catch(() => {});
   });
+  pauseBtn.addEventListener('click', async () => {
+    entry.sent = true;
+    entry.finish('Denied, and requests paused for an hour', 'bad');
+    localStorage.setItem(PAUSE_KEY, String(Date.now() + PAUSE_SECONDS * 1000));
+    showPause(send);
+    await send({ type: 'deny', id: r.id }).catch(() => {});
+    await send({ type: 'pause', seconds: PAUSE_SECONDS }).catch(() => {});
+  });
   return entry;
 }
 
@@ -121,6 +147,10 @@ function onStatus(id, s) {
 
 async function start(pairing, justPaired) {
   const topics = await topicsFor(pairing.k);
+  const send = async (msg) => publish(pairing.server, topics.data, await seal(pairing.k, 'p2e', msg));
+  app.prepend(pauseBanner);
+  showPause(send);
+  setInterval(() => showPause(send), 30_000);
   footer.replaceChildren(
     el('div', { class: 'muted' }, 'Push notifications: in the ntfy app, subscribe to server ', el('code', {}, pairing.server), ' topic ', el('code', {}, topics.notify), '.'),
     el('div', { class: 'btns' }, el('button', { class: 'plain', onclick: () => {
@@ -148,9 +178,9 @@ async function start(pairing, justPaired) {
         onStatus(msg.id, msg);
       } else if (msg.type === 'request' && Array.isArray(msg.fields) && !cards.has(msg.id)) {
         if (TERMINAL.has(statuses.get(msg.id)?.status) || msg.expires_at < Date.now()) return;
-        const entry = buildCard(pairing, topics, msg);
+        const entry = buildCard(pairing, topics, msg, send);
         cards.set(msg.id, entry);
-        app.prepend(entry.el);
+        pauseBanner.after(entry.el);
       }
       emptyState();
     });

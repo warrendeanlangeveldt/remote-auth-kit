@@ -1,6 +1,6 @@
 {
   "name": "login-relay",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Let Claude request a browser login; you enter the password/OTP on your phone and a companion extension fills it. Claude never receives the values.",

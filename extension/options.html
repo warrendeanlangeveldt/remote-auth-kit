@@ -22,9 +22,12 @@
   <h2>Login Relay</h2>
   <div>Relay: <b id="status">…</b></div>
 
-  <label for="allowedDomains">Allowed domains</label>
-  <textarea id="allowedDomains" placeholder="apple.com, github.com"></textarea>
-  <div class="muted">Logins are only ever filled on these domains (and their subdomains).</div>
+  <div id="pageWarning" class="warn" hidden></div>
+  <div id="paused" hidden><span class="warn" id="pausedText"></span> <button id="resume">Resume</button></div>
+
+  <label for="allowedDomains">Allowed sites</label>
+  <textarea id="allowedDomains" placeholder="idmsa.apple.com, github.com"></textarea>
+  <div class="muted">Logins are only ever filled on these exact hostnames. <code>*.apple.com</code> allows apple.com and every subdomain: only use that where nobody else can host pages on a subdomain (not <code>*.google.com</code>, for example, which includes sites.google.com).</div>
 
   <label for="approveUrl">Phone approval page URL</label>
   <input id="approveUrl" placeholder="https://warrendeanlangeveldt.github.io/login-relay/ (default)">

@@ -8,12 +8,16 @@ let pairingShown = false;
 let wasPaired = null;
 
 async function refresh() {
-  const s = await chrome.storage.local.get([...ids, 'status', 'phonePaired']);
+  const s = await chrome.storage.local.get([...ids, 'status', 'phonePaired', 'pausedUntil', 'pageWarning']);
   for (const id of ids) if (document.activeElement !== $(id)) $(id).value = s[id] || '';
   $('status').textContent = s.status || 'unknown';
   $('phoneState').textContent = s.phonePaired ? 'Paired ✓' : 'No phone paired yet.';
   $('phoneState').className = s.phonePaired ? 'ok' : 'warn';
   if (wasPaired === false && s.phonePaired && pairingShown) hidePairing(); // the phone just checked in
+  $('paused').hidden = !(s.pausedUntil > Date.now());
+  if (s.pausedUntil > Date.now()) $('pausedText').textContent = `Login requests paused from your phone until ${new Date(s.pausedUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`;
+  $('pageWarning').hidden = !s.pageWarning;
+  $('pageWarning').textContent = s.pageWarning ? `The approval page at ${s.pageWarning} has changed from the version this extension trusts. Logins are refused, and you shouldn't type passwords into that page, until the extension is updated or the page is put back.` : '';
   wasPaired = !!s.phonePaired;
 }
 
@@ -59,6 +63,7 @@ function hidePairing() {
 }
 
 $('showPair').addEventListener('click', showPairing);
+$('resume').addEventListener('click', async () => { await send({ type: 'resume' }); await refresh(); });
 $('reset').addEventListener('click', async () => {
   await send({ type: 'reset_pairing' });
   await refresh();
