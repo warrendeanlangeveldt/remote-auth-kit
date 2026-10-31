@@ -1,4 +1,4 @@
-// Login Relay hub: owns the WebSocket to the companion extension and the
+// Remote Auth Kit hub: owns the WebSocket to the companion extension and the
 // request store. It never sees a password or code: the phone encrypts them to
 // the extension's key and sends them through ntfy straight to the extension.
 // The hub only learns the status (filled, failed, denied, expired).
@@ -107,7 +107,7 @@ export function createRelay({ log = console.error } = {}) {
     };
     requests.set(r.id, r);
     if (!(await extensionReady(EXTENSION_WAIT_MS))) {
-      update(r, { status: 'failed', detail: 'the Login Relay extension is not connected (is Chrome open with the extension installed and pointed at this relay?)' });
+      update(r, { status: 'failed', detail: 'the Remote Auth Kit extension is not connected (is Chrome open with the extension installed and pointed at this relay?)' });
       return view(r);
     }
     sendExt({

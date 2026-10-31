@@ -1,8 +1,8 @@
-# Optional hosted relay, only needed to use Login Relay from claude.ai or the
+# Optional hosted relay, only needed to use Remote Auth Kit from claude.ai or the
 # Claude mobile app. Claude Code users don't need it.
 # Request state is in memory, so run exactly ONE machine and keep it up
 # (the extension holds a WebSocket open to it).
-app = "login-relay-CHANGE-ME"
+app = "remote-auth-kit-CHANGE-ME"
 primary_region = "syd"
 
 [http_service]

@@ -8,6 +8,9 @@
 //     ever stores ciphertext and nobody without K can read or forge messages.
 // Passwords and codes are additionally encrypted to the extension's own ECDH
 // key (pinned on the phone at pairing), so only the extension can open them.
+//
+// The "login-relay" labels below are protocol constants from the project's
+// first name. Changing them would break every existing pairing, so they stay.
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();

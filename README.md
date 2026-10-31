@@ -1,6 +1,6 @@
-# Login Relay
+# Remote Auth Kit
 
-Login Relay lets Claude get past a browser login while you're away from your computer. Claude asks for the login, your phone shows you which site and which tab, you type the password or 2FA code on the phone, and a Chrome extension fills it into the page. Claude never receives the value; its tool call returns only a status.
+Remote Auth Kit lets Claude get past a browser login while you're away from your computer. Claude asks for the login, your phone shows you which site and which tab, you type the password or 2FA code on the phone, and a Chrome extension fills it into the page. Claude never receives the value; its tool call returns only a status.
 
 It's a Claude Code plugin. The plugin runs the relay on your own computer, so there is no server to host. The phone talks to the extension through [ntfy](https://ntfy.sh), which only ever carries encrypted messages and a "Claude needs a password for apple.com" push.
 
@@ -49,11 +49,11 @@ What's left: the hook only runs in Claude Code, so it doesn't guard Claude in Ch
 ### 1. Install the plugin
 
 ```
-/plugin marketplace add warrendeanlangeveldt/login-relay
-/plugin install login-relay@login-relay
+/plugin marketplace add warrendeanlangeveldt/remote-auth-kit
+/plugin install remote-auth-kit@remote-auth-kit
 ```
 
-The relay starts with your Claude Code session and listens on `127.0.0.1:47823`. If you run several sessions, they share one relay. Set `LOGIN_RELAY_PORT` in your environment to use a different port, and set the same port in the extension's Relay URL.
+The relay starts with your Claude Code session and listens on `127.0.0.1:47823`. If you run several sessions, they share one relay. Set `REMOTE_AUTH_KIT_PORT` in your environment to use a different port, and set the same port in the extension's Relay URL.
 
 ### 2. Load the extension
 
@@ -61,7 +61,7 @@ Download or clone this repository, then in Chrome go to `chrome://extensions`, t
 
 Open the extension's options and set **Allowed sites**: the exact hostnames that show the login fields, such as `idmsa.apple.com, github.com`. If you aren't sure which host a site uses, ask for a login anyway: the failure names the host to add. `*.apple.com` allows apple.com and every subdomain, which is only safe where nobody else can host pages on a subdomain. `*.google.com`, for example, includes sites.google.com, where anyone can publish a page.
 
-The phone approval page defaults to the copy published from this repository at `https://warrendeanlangeveldt.github.io/login-relay/`. To use your own copy instead, see "Publishing your own approval page" below.
+The phone approval page defaults to the copy published from this repository at `https://warrendeanlangeveldt.github.io/remote-auth-kit/`. To use your own copy instead, see "Publishing your own approval page" below.
 
 Leave the Relay URL empty. The status shows "connected" while a Claude Code session is running and "waiting for Claude Code" when none is.
 
@@ -100,22 +100,22 @@ Taking App Store Connect as the example:
 
 - The computer must be on with Chrome open and a Claude Code session running.
 - The fill rules cover standard password fields, `one-time-code` fields, and split one-box-per-digit code inputs. Unusual login pages may need a site-specific rule in `pageAgent()` in `extension/background.js`. For those, Chrome Remote Desktop from your phone is a workable fallback.
-- Passkeys need you at the computer, so Login Relay can't help with them.
+- Passkeys need you at the computer, so Remote Auth Kit can't help with them.
 - `host_permissions` is `https://*/*` so you can change the allowed sites without reinstalling. Narrow it in `extension/manifest.json` if you prefer.
 - With a hosted relay (below), the hook can't see the relay, so the script guard doesn't apply. The exact-host, page-pin and rate checks in the extension still do.
 
 ## claude.ai and the Claude mobile app (optional)
 
-claude.ai and the mobile app can only reach MCP servers on the internet, so using Login Relay from them needs a hosted relay. `server/hosted.js` is the same relay with MCP over HTTP behind a secret path and a token for the extension. It also serves the phone page.
+claude.ai and the mobile app can only reach MCP servers on the internet, so using Remote Auth Kit from them needs a hosted relay. `server/hosted.js` is the same relay with MCP over HTTP behind a secret path and a token for the extension. It also serves the phone page.
 
 ```bash
 for k in MCP_PATH_SECRET EXTENSION_TOKEN; do doppler secrets set $k="$(openssl rand -hex 24)"; done
-fly apps create login-relay-CHANGE-ME          # and set `app` in fly.toml
+fly apps create remote-auth-kit-CHANGE-ME          # and set `app` in fly.toml
 doppler secrets download --no-file --format env | fly secrets import
 fly deploy --ha=false
 ```
 
-Then set the extension's Relay URL to `https://login-relay-CHANGE-ME.fly.dev` and its token to `EXTENSION_TOKEN`, and add `https://login-relay-CHANGE-ME.fly.dev/mcp/<MCP_PATH_SECRET>` as a custom connector in claude.ai. Request state is in memory, so run one machine.
+Then set the extension's Relay URL to `https://remote-auth-kit-CHANGE-ME.fly.dev` and its token to `EXTENSION_TOKEN`, and add `https://remote-auth-kit-CHANGE-ME.fly.dev/mcp/<MCP_PATH_SECRET>` as a custom connector in claude.ai. Request state is in memory, so run one machine.
 
 ## Tests
 

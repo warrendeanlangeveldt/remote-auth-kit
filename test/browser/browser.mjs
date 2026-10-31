@@ -109,7 +109,7 @@ cleanups.push(ntfy.close);
 // ---------- Claude Code's side: the plugin's MCP server over stdio ----------
 const transport = new StdioClientTransport({
   command: 'node', args: [path.join(root, 'server', 'local.js')],
-  env: { ...process.env, LOGIN_RELAY_PORT: String(RELAY_PORT), GUARD_AFTER_FILL_SECONDS: '1' }, stderr: 'inherit',
+  env: { ...process.env, REMOTE_AUTH_KIT_PORT: String(RELAY_PORT), GUARD_AFTER_FILL_SECONDS: '1' }, stderr: 'inherit',
 });
 const claude = new Client({ name: 'browser-test', version: '0' });
 await claude.connect(transport);
@@ -124,7 +124,7 @@ const requestLogin = async (args, { keepRateLimit = false } = {}) => {
 
 // The plugin's hook, as Claude Code would run it before a Claude in Chrome tool call.
 const hook = (tool, toolInput, event = 'PreToolUse') => new Promise((resolve) => {
-  const p = spawn('node', [path.join(root, 'hooks', 'guard.js')], { env: { ...process.env, LOGIN_RELAY_PORT: String(RELAY_PORT) } });
+  const p = spawn('node', [path.join(root, 'hooks', 'guard.js')], { env: { ...process.env, REMOTE_AUTH_KIT_PORT: String(RELAY_PORT) } });
   let out = '';
   p.stdout.on('data', (d) => (out += d));
   p.on('close', () => resolve(out ? JSON.parse(out).hookSpecificOutput?.permissionDecision : 'allow'));
@@ -333,7 +333,7 @@ try {
   const tampered = await requestLogin({ domain: 'relay.test', fields: ['password'] });
   assert(tampered.status === 'failed' && /approval page .* has changed/.test(tampered.detail), 'refuses to use an approval page whose code changed');
   const sinceTamper = ntfy.messages.slice(pushesBefore);
-  assert(sinceTamper.length === 1 && sinceTamper[0].headers.title === 'Login Relay warning', 'warns on the phone, and sends no request');
+  assert(sinceTamper.length === 1 && sinceTamper[0].headers.title === 'Remote Auth Kit warning', 'warns on the phone, and sends no request');
   await options.waitForFunction(() => !document.getElementById('pageWarning').hidden, { polling: 100 });
   assert(true, 'options page shows the approval page warning');
   phoneServing.tamper = false;

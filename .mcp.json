@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "login-relay": {
+    "remote-auth-kit": {
       "command": "node",
       "args": ["${CLAUDE_PLUGIN_ROOT}/server/local.js"]
     }

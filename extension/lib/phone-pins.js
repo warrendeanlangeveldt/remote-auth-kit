@@ -4,6 +4,5 @@
 // it sends anything to your phone.
 export const PHONE_FILES = ["app.js","index.html","manifest.webmanifest","relay-crypto.js"];
 export const PHONE_PINS = [
-  "9c1a0db2aaae53bc50af5936dc6ffcc4d39f79fe59f9f8b69fee9f306c9ef07e",
-  "4d37bbb6c99f3d39adfc84deef373bdf3cadbc7b27b1edaae1bc223a5dc476a7"
+  "1f44cc0aeb4371a4d48f039982d25185975371bba2c10f2db0a9a37a8fead301"
 ];

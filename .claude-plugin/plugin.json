@@ -1,6 +1,6 @@
 {
-  "name": "login-relay",
-  "displayName": "Login Relay",
+  "name": "remote-auth-kit",
+  "displayName": "Remote Auth Kit",
   "version": "0.3.0",
   "description": "Lets Claude get past browser logins while you're away: you approve on your phone, a Chrome extension fills the password or 2FA code, and Claude only ever gets a status.",
   "author": { "name": "Warren Langeveldt" },

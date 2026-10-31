@@ -30,7 +30,7 @@ const cleanups = [];
 async function session(env = {}) {
   const transport = new StdioClientTransport({
     command: 'node', args: ['server/local.js'],
-    env: { ...process.env, LOGIN_RELAY_PORT: String(PORT), EXTENSION_WAIT_SECONDS: '3', GUARD_AFTER_FILL_SECONDS: '1', ...env },
+    env: { ...process.env, REMOTE_AUTH_KIT_PORT: String(PORT), EXTENSION_WAIT_SECONDS: '3', GUARD_AFTER_FILL_SECONDS: '1', ...env },
     stderr: 'pipe',
   });
   const client = new Client({ name: 'test', version: '0' });
@@ -126,7 +126,7 @@ async function fakePhone({ link, action = 'submit', values = SECRET, since = '1m
 // ---- the plugin's PreToolUse/PostToolUse hook, run as Claude Code runs it ----
 function hook(event, tool, toolInput, env = {}) {
   return new Promise((resolve) => {
-    const p = spawn('node', ['hooks/guard.js'], { env: { ...process.env, LOGIN_RELAY_PORT: String(PORT), CLAUDE_PLUGIN_ROOT: '', ...env } });
+    const p = spawn('node', ['hooks/guard.js'], { env: { ...process.env, REMOTE_AUTH_KIT_PORT: String(PORT), CLAUDE_PLUGIN_ROOT: '', ...env } });
     let out = '';
     p.stdout.on('data', (d) => (out += d));
     p.on('close', () => resolve(out ? JSON.parse(out).hookSpecificOutput : null));
@@ -166,7 +166,7 @@ try {
   const ext = await fakeExtension({ url: `ws://127.0.0.1:${PORT}/ext`, ntfy, k });
   assert(await ext.waitConnected(), 'extension connected to the local relay');
 
-  const link = pairingLink('https://phone.example/login-relay/', { k, server: ntfy.url, jwk: ext.jwk });
+  const link = pairingLink('https://phone.example/remote-auth-kit/', { k, server: ntfy.url, jwk: ext.jwk });
   assert(new URL(link).search === '' && new URL(link).hash.startsWith('#pair='), 'pairing key travels only in the URL fragment');
   const phone = await fakePhone({ link });
 
@@ -248,12 +248,12 @@ try {
   assert(denied(await pre('Bash', { command: 'open -a "Google Chrome" --args --remote-debugging-port=9222' })), "hook refuses opening Chrome's debugging port");
   assert((await pre('Bash', { command: 'ls -la' })) === null, 'hook leaves ordinary shell commands alone');
   assert((await pre('Bash', { command: `osascript -e 'return "javascript test"'` })) === null, 'hook leaves AppleScript that does not touch Chrome alone');
-  const installed = { CLAUDE_PLUGIN_ROOT: '/Users/me/.claude/plugins/cache/login-relay/login-relay/0.2.0' };
+  const installed = { CLAUDE_PLUGIN_ROOT: '/Users/me/.claude/plugins/cache/remote-auth-kit/remote-auth-kit/0.2.0' };
   assert(denied(await pre('Edit', { file_path: `${installed.CLAUDE_PLUGIN_ROOT}/hooks/hooks.json` }, installed)), "hook refuses edits to the installed plugin's files");
-  assert(denied(await pre('Bash', { command: `sed -i '' d ~/.claude/plugins/cache/login-relay/login-relay/0.2.0/hooks/guard.js` }, installed)), "hook refuses shell commands touching the installed plugin's files");
+  assert(denied(await pre('Bash', { command: `sed -i '' d ~/.claude/plugins/cache/remote-auth-kit/remote-auth-kit/0.2.0/hooks/guard.js` }, installed)), "hook refuses shell commands touching the installed plugin's files");
   assert((await pre('Edit', { file_path: '/Users/me/project/app.js' }, installed)) === null, 'hook leaves other edits alone');
   assert((await pre('Edit', { file_path: `${process.cwd()}/hooks/guard.js` }, { CLAUDE_PLUGIN_ROOT: process.cwd() })) === null, 'a plugin loaded from a working folder stays editable');
-  assert((await pre(CHROME('javascript_tool'), { action: 'javascript_exec', tabId: 7, text: '1' }, { LOGIN_RELAY_PORT: String(PORT + 7) })) === null, 'with no relay running, page tools are allowed');
+  assert((await pre(CHROME('javascript_tool'), { action: 'javascript_exec', tabId: 7, text: '1' }, { REMOTE_AUTH_KIT_PORT: String(PORT + 7) })) === null, 'with no relay running, page tools are allowed');
 
   // login_status for an unknown id
   const unknown = await s2.client.callTool({ name: 'login_status', arguments: { request_id: 'nope' } });

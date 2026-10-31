@@ -63,4 +63,4 @@ app.use(express.static(phoneDir));
 
 const httpServer = http.createServer(app);
 attachSockets(httpServer, relay, { extensionToken: EXTENSION_TOKEN });
-httpServer.listen(PORT, () => console.log(`login-relay (hosted) listening on :${PORT}`));
+httpServer.listen(PORT, () => console.log(`remote-auth-kit (hosted) listening on :${PORT}`));

@@ -1,4 +1,4 @@
-// Login Relay companion extension (MV3 service worker).
+// Remote Auth Kit companion extension (MV3 service worker).
 // - Connects to the relay (local Claude Code by default) and receives login requests.
 // - Finds the tab and frame showing the field, on an allowlisted domain only.
 // - Sends the request to your phone through ntfy, sealed with the pairing key.
@@ -14,7 +14,7 @@ import { PHONE_FILES, PHONE_PINS } from './lib/phone-pins.js';
 
 const DEFAULT_RELAY_URL = 'ws://127.0.0.1:47823';
 const DEFAULT_NTFY_SERVER = 'https://ntfy.sh';
-const DEFAULT_APPROVE_URL = 'https://warrendeanlangeveldt.github.io/login-relay/';
+const DEFAULT_APPROVE_URL = 'https://warrendeanlangeveldt.github.io/remote-auth-kit/';
 const PENDING_MAX_AGE_MS = 5 * 60_000;
 const RATE_WINDOW_MS = 15 * 60_000;
 const RATE_MAX = 6; // requests sent to your phone per window
@@ -267,8 +267,8 @@ async function checkPhonePage() {
   if (k && Date.now() - pageWarnedAt > 3600_000) {
     await chrome.storage.local.set({ pageWarnedAt: Date.now() });
     const { notify } = await topicsFor(k);
-    await publish(ntfyServer, notify, 'The Login Relay approval page has changed and is no longer trusted. Do not type passwords into it. Logins are refused until this is resolved.',
-      { Title: 'Login Relay warning', Priority: 'high', Tags: 'warning' }).catch(() => {});
+    await publish(ntfyServer, notify, 'The Remote Auth Kit approval page has changed and is no longer trusted. Do not type passwords into it. Logins are refused until this is resolved.',
+      { Title: 'Remote Auth Kit warning', Priority: 'high', Tags: 'warning' }).catch(() => {});
   }
   return `the approval page at ${approveUrl} has changed from the version this extension trusts, so nothing was sent to your phone. Don't enter passwords on it until the extension is updated`;
 }
@@ -304,12 +304,12 @@ async function onLoginRequest({ id, domain, fields, note, submit, expires_at, la
   await noteScriptRan(last_script_at);
   const k = await getPairing();
   if (!k || !(await chrome.storage.local.get('phonePaired')).phonePaired) {
-    return relayStatus(id, 'failed', 'no phone is paired yet: open the Login Relay extension options and scan the pairing code with your phone');
+    return relayStatus(id, 'failed', 'no phone is paired yet: open the Remote Auth Kit extension options and scan the pairing code with your phone');
   }
   const paused = await pausedUntil();
   if (paused) return relayStatus(id, 'failed', `login requests are paused from the user's phone until ${clock(paused)}. Don't retry before then.`);
   if (!requestAllowed(domain, await allowEntries())) {
-    return relayStatus(id, 'failed', `${domain} is not in the Login Relay extension's allowed sites`);
+    return relayStatus(id, 'failed', `${domain} is not in the Remote Auth Kit extension's allowed sites`);
   }
   if (Object.keys(await allPending()).length) {
     return relayStatus(id, 'failed', 'another login request is still waiting on the phone; wait for it to finish');
@@ -320,7 +320,7 @@ async function onLoginRequest({ id, domain, fields, note, submit, expires_at, la
   }
   const { target: t, blockedHost } = await findTarget(domain, fields);
   if (!t && blockedHost) {
-    return relayStatus(id, 'failed', `the ${fields.join(' + ')} field is on ${blockedHost}, which isn't in the Login Relay extension's allowed sites (add ${blockedHost}, or *.${domain} to allow every subdomain)`);
+    return relayStatus(id, 'failed', `the ${fields.join(' + ')} field is on ${blockedHost}, which isn't in the Remote Auth Kit extension's allowed sites (add ${blockedHost}, or *.${domain} to allow every subdomain)`);
   }
   if (!t) return relayStatus(id, 'failed', `no open tab on ${domain} is showing a ${fields.join(' + ')} field`);
   if ((await lastScriptAt()) > t.loadedAt) {

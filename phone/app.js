@@ -30,7 +30,7 @@ function showUnpaired(msg) {
   app.replaceChildren(el('div', { class: 'card' },
     msg ? el('div', { class: 'warn' }, msg) : null,
     el('div', {}, 'This phone is not paired.'),
-    el('div', { class: 'muted' }, 'On your computer, open the Login Relay extension options, choose "Pair a phone", and scan the code with your camera (or open the pairing link you saved).')));
+    el('div', { class: 'muted' }, 'On your computer, open the Remote Auth Kit extension options, choose "Pair a phone", and scan the code with your camera (or open the pairing link you saved).')));
   footer.replaceChildren();
 }
 

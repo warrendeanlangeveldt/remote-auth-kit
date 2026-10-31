@@ -1,8 +1,8 @@
 {
-  "name": "login-relay",
-  "description": "Login Relay: approve Claude's browser logins from your phone without Claude seeing the password.",
+  "name": "remote-auth-kit",
+  "description": "Remote Auth Kit: approve Claude's browser logins from your phone without Claude seeing the password.",
   "owner": { "name": "Warren Langeveldt" },
   "plugins": [
-    { "name": "login-relay", "source": "./", "description": "Phone-approved password and 2FA fills for Claude in Chrome. Runs locally; nothing to host." }
+    { "name": "remote-auth-kit", "source": "./", "description": "Phone-approved password and 2FA fills for Claude in Chrome. Runs locally; nothing to host." }
   ]
 }

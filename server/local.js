@@ -14,9 +14,9 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createRelay, attachSockets } from './hub.js';
 import { buildMcp } from './mcp.js';
 
-const PORT = Number(process.env.LOGIN_RELAY_PORT || 47823);
+const PORT = Number(process.env.REMOTE_AUTH_KIT_PORT || 47823);
 const HOST = '127.0.0.1';
-const log = (...a) => console.error(new Date().toISOString().slice(17, 23), '[login-relay]', ...a);
+const log = (...a) => console.error(new Date().toISOString().slice(17, 23), '[remote-auth-kit]', ...a);
 
 let backend = null; // { create, wait }
 let lastError = null;
@@ -26,7 +26,7 @@ const setBackend = (b) => { backend = b; if (b) { lastError = null; [...readyWai
 function getRelay() {
   if (backend) return Promise.resolve(backend);
   return new Promise((resolve, reject) => {
-    const done = () => { clearTimeout(timer); readyWaiters.delete(done); backend ? resolve(backend) : reject(new Error(lastError || 'login relay is still starting, try again')); };
+    const done = () => { clearTimeout(timer); readyWaiters.delete(done); backend ? resolve(backend) : reject(new Error(lastError || 'the Remote Auth Kit relay is still starting, try again')); };
     const timer = setTimeout(done, 5000);
     readyWaiters.add(done);
   });
@@ -57,7 +57,7 @@ function becomePeer() {
     const ws = new WebSocket(`ws://${HOST}:${PORT}/peer`);
     const calls = new Map();
     const call = (method, params) => new Promise((res, rej) => {
-      if (ws.readyState !== 1) return rej(new Error('lost the connection to the login relay hub, try again'));
+      if (ws.readyState !== 1) return rej(new Error('lost the connection to the Remote Auth Kit relay, try again'));
       const rid = crypto.randomUUID();
       calls.set(rid, { res, rej });
       ws.send(JSON.stringify({ type: 'rpc', rid, method, params }));
@@ -76,7 +76,7 @@ function becomePeer() {
       onClose: (fn) => ws.on('close', fn),
     }));
     ws.on('close', () => {
-      for (const c of calls.values()) c.rej(new Error('the login relay hub restarted; call request_login again'));
+      for (const c of calls.values()) c.rej(new Error('the Remote Auth Kit relay restarted; call request_login again'));
       calls.clear();
     });
     ws.on('error', reject);
@@ -90,7 +90,7 @@ async function elect() {
     return;
   } catch (e) {
     if (e.code !== 'EADDRINUSE') {
-      lastError = `could not start the login relay on port ${PORT}: ${e.message}`;
+      lastError = `could not start the Remote Auth Kit relay on port ${PORT}: ${e.message}`;
       log(lastError);
       return setTimeout(elect, 5000);
     }
@@ -104,7 +104,7 @@ async function elect() {
       setTimeout(elect, 100 + Math.random() * 400);
     });
   } catch (e) {
-    lastError = `port ${PORT} is in use by something other than Login Relay (set LOGIN_RELAY_PORT to change it)`;
+    lastError = `port ${PORT} is in use by something other than Remote Auth Kit (set REMOTE_AUTH_KIT_PORT to change it)`;
     log(lastError, e.message);
     setTimeout(elect, 2000);
   }

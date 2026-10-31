@@ -15,7 +15,7 @@
 
 import path from 'node:path';
 
-const PORT = Number(process.env.LOGIN_RELAY_PORT || 47823);
+const PORT = Number(process.env.REMOTE_AUTH_KIT_PORT || 47823);
 const BASE = `http://127.0.0.1:${PORT}`;
 const CHROME = /^mcp__claude-in-chrome__/;
 // Tools that run code in the page, and tools that can read what the page sent.
@@ -27,7 +27,7 @@ const out = (decision, reason) => {
     hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: decision, permissionDecisionReason: reason },
   }));
 };
-const deny = (reason) => out('deny', `Login Relay: ${reason}`);
+const deny = (reason) => out('deny', `Remote Auth Kit: ${reason}`);
 
 async function relay(method, route) {
   try {
@@ -53,13 +53,13 @@ const readsPage = (it) => runsScript(it) || READ_TOOLS.has(it.name);
 // is being developed, so its files are left editable.
 const root = process.env.CLAUDE_PLUGIN_ROOT || '';
 const installed = /[\\/]\.claude[\\/]plugins[\\/]/.test(root);
-const pluginFiles = /[\\/]\.claude[\\/]plugins[\\/][^\s'"]*login-relay/;
+const pluginFiles = /[\\/]\.claude[\\/]plugins[\\/][^\s'"]*remote-auth-kit/;
 const touchesPlugin = (p) => installed && (pluginFiles.test(p) || (root && path.resolve(String(p)).startsWith(root)));
 
 function shellBypass(cmd) {
-  if (/osascript/.test(cmd) && /javascript/i.test(cmd) && /chrom/i.test(cmd)) return 'running JavaScript in Chrome through AppleScript is blocked by the Login Relay plugin';
-  if (/remote-debugging-(port|pipe)/.test(cmd)) return "opening Chrome's debugging port is blocked by the Login Relay plugin";
-  if (touchesPlugin(cmd) || (installed && root && cmd.includes(root))) return "the Login Relay plugin's own files can't be changed from a session it guards";
+  if (/osascript/.test(cmd) && /javascript/i.test(cmd) && /chrom/i.test(cmd)) return 'running JavaScript in Chrome through AppleScript is blocked by the Remote Auth Kit plugin';
+  if (/remote-debugging-(port|pipe)/.test(cmd)) return "opening Chrome's debugging port is blocked by the Remote Auth Kit plugin";
+  if (touchesPlugin(cmd) || (installed && root && cmd.includes(root))) return "the Remote Auth Kit plugin's own files can't be changed from a session it guards";
   return null;
 }
 
@@ -87,5 +87,5 @@ if (CHROME.test(name)) {
   const why = shellBypass(String(toolInput.command || ''));
   if (why) deny(why);
 } else if (event === 'PreToolUse' && ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'].includes(name)) {
-  if (touchesPlugin(toolInput.file_path || toolInput.notebook_path || '')) deny("the Login Relay plugin's own files can't be changed from a session it guards");
+  if (touchesPlugin(toolInput.file_path || toolInput.notebook_path || '')) deny("the Remote Auth Kit plugin's own files can't be changed from a session it guards");
 }
