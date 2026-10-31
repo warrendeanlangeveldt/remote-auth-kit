@@ -26,11 +26,27 @@ function loadPairing() {
   try { return JSON.parse(localStorage.getItem(PAIR_KEY) || 'null'); } catch { return null; }
 }
 
+// Pairing is kept in this browser's storage. A notification can open the page in
+// another browser, or in an app's built-in browser, which has storage of its own,
+// so the page offers to pair from the saved link right here.
 function showUnpaired(msg) {
+  const link = el('input', { type: 'text', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', placeholder: 'Paste your pairing link' });
+  const problem = el('div', { class: 'status bad' });
+  const pair = () => {
+    const p = parsePairing(link.value.trim());
+    link.value = '';
+    if (!p) { problem.textContent = 'That is not a pairing link.'; return; }
+    localStorage.setItem(PAIR_KEY, JSON.stringify(p));
+    app.replaceChildren();
+    start(p, true);
+  };
   app.replaceChildren(el('div', { class: 'card' },
     msg ? el('div', { class: 'warn' }, msg) : null,
-    el('div', {}, 'This phone is not paired.'),
-    el('div', { class: 'muted' }, 'On your computer, open the Remote Auth Kit extension options, choose "Pair a phone", and scan the code with your camera (or open the pairing link you saved).')));
+    el('div', {}, 'This browser is not paired.'),
+    el('div', { class: 'muted' }, 'Pairing is saved in the browser you paired with. If a notification opened this page in a different browser, or inside the ntfy app, paste the pairing link you saved and it will be paired here too.'),
+    el('label', {}, 'Pairing link'), link,
+    el('div', { class: 'btns' }, el('button', { class: 'primary pair', onclick: pair }, 'Pair this browser')), problem,
+    el('div', { class: 'muted' }, 'No saved link? On your computer, open the Remote Auth Kit extension options, choose "Pair a phone", and scan the code or copy the link.')));
   footer.replaceChildren();
 }
 

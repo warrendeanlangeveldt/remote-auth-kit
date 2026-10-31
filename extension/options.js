@@ -27,14 +27,23 @@ function validUrl(v, { ws = false } = {}) {
   return /^(https?|wss?):\/\/(127\.0\.0\.1|localhost)([:/]|$)/.test(v); // local relay or local ntfy
 }
 
+let savedTimer = null;
+function saveMsg(text, cls) {
+  clearTimeout(savedTimer);
+  $('saveMsg').textContent = text;
+  $('saveMsg').className = cls;
+  if (cls === 'ok') savedTimer = setTimeout(() => ($('saveMsg').textContent = ''), 3000);
+}
+
 $('save').addEventListener('click', async () => {
   const v = Object.fromEntries(ids.map((id) => [id, $(id).value.trim()]));
   v.relayUrl = v.relayUrl.replace(/\/$/, '');
   v.ntfyServer = v.ntfyServer.replace(/\/$/, '');
-  if (!validUrl(v.relayUrl, { ws: true })) return ($('status').textContent = 'Relay URL must be https://, wss:// or on this computer');
-  if (!validUrl(v.ntfyServer)) return ($('status').textContent = 'ntfy server must be https://');
-  if (v.approveUrl && !/^https:\/\//.test(v.approveUrl)) return ($('status').textContent = 'Approval page URL must be https://');
+  if (!validUrl(v.relayUrl, { ws: true })) return saveMsg('Not saved: the relay URL must be https://, wss:// or on this computer', 'warn');
+  if (!validUrl(v.ntfyServer)) return saveMsg('Not saved: the ntfy server must be https://', 'warn');
+  if (v.approveUrl && !/^https:\/\//.test(v.approveUrl)) return saveMsg('Not saved: the approval page URL must be https://', 'warn');
   await chrome.storage.local.set(v);
+  saveMsg('Saved ✓', 'ok');
   await send({ type: 'reconnect' });
   if (pairingShown) await showPairing();
   setTimeout(refresh, 1000);

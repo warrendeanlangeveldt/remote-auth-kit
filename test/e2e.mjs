@@ -238,9 +238,12 @@ try {
   await sleep(1300); // GUARD_AFTER_FILL_SECONDS=1 in these sessions
   assert((await pre(CHROME('javascript_tool'), { action: 'javascript_exec', tabId: 7, text: '1' })) === null, 'later, other tabs are allowed again');
   assert(denied(await pre(CHROME('javascript_tool'), { action: 'javascript_exec', tabId: 42, text: '1' })), 'the filled tab stays guarded until its page is replaced');
+  assert(denied(await pre(CHROME('read_page'), { tabId: 42 })) && denied(await pre(CHROME('find'), { tabId: 42, query: 'password' })), "the filled tab's fields can't be read until its page is replaced");
+  assert(denied(await pre(CHROME('get_page_text'), {})), 'a field tool with no tab given is refused while a filled page is open');
+  assert((await pre(CHROME('read_page'), { tabId: 7 })) === null && (await pre(CHROME('computer'), { action: 'screenshot', tabId: 42 })) === null, 'other tabs can be read, and the filled tab can be screenshotted');
   ext.tabNavigated();
   await sleep(200);
-  assert((await pre(CHROME('javascript_tool'), { action: 'javascript_exec', tabId: 42, text: '1' })) === null, 'once the filled page is replaced, its tab is allowed again');
+  assert((await pre(CHROME('javascript_tool'), { action: 'javascript_exec', tabId: 42, text: '1' })) === null && (await pre(CHROME('read_page'), { tabId: 42 })) === null, 'once the filled page is replaced, its tab is allowed again');
   holder.close();
 
   const osa = `osascript -e 'tell application "Google Chrome" to execute front window's active tab javascript "document.forms"'`;

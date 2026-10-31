@@ -4,7 +4,7 @@
 // it can't be talked round:
 //   - While a login is open, and until the filled page is replaced, it refuses
 //     Claude in Chrome's tools that can run scripts in a page or read its
-//     network traffic.
+//     network traffic, and the tools that read form fields in the filled tab.
 //   - It reports every page script Claude runs to the relay, so the extension
 //     can refuse to fill a page a script ran in after it loaded (a script could
 //     have left a listener behind to catch the value).
@@ -21,6 +21,9 @@ const CHROME = /^mcp__claude-in-chrome__/;
 // Tools that run code in the page, and tools that can read what the page sent.
 const SCRIPT_TOOLS = new Set(['javascript_tool', 'shortcuts_execute']);
 const READ_TOOLS = new Set(['read_network_requests']);
+// Tools that read or change form fields. The filled page can hold the password
+// in its field until the site has used it, so these are refused on that tab only.
+const FIELD_TOOLS = new Set(['read_page', 'get_page_text', 'find', 'form_input']);
 
 const out = (decision, reason) => {
   process.stdout.write(JSON.stringify({
@@ -48,6 +51,7 @@ function chromeItems(name, input) {
 }
 const runsScript = (it) => SCRIPT_TOOLS.has(it.name) || (it.name === 'navigate' && /^\s*javascript:/i.test(String(it.input.url || '')));
 const readsPage = (it) => runsScript(it) || READ_TOOLS.has(it.name);
+const readsFields = (it) => FIELD_TOOLS.has(it.name);
 
 // The installed plugin's files. A plugin loaded from a working folder (--plugin-dir)
 // is being developed, so its files are left editable.
@@ -71,11 +75,14 @@ const { hook_event_name: event, tool_name: name = '', tool_input: toolInput = {}
 
 if (CHROME.test(name)) {
   const items = chromeItems(name, toolInput);
-  if (event === 'PreToolUse' && items.some(readsPage)) {
+  if (event === 'PreToolUse' && items.some((it) => readsPage(it) || readsFields(it))) {
     const guard = await relay('GET', '/guard');
-    const hit = guard && (guard.block_all || items.some((it) => readsPage(it) && guard.tab_ids?.includes(it.input.tabId)));
-    if (hit) {
+    // A field tool with no tabId acts on the current tab, which may be the filled one.
+    const onFilledTab = (it) => guard.tab_ids?.length && (it.input.tabId === undefined || guard.tab_ids.includes(it.input.tabId));
+    if (guard && items.some((it) => readsPage(it) && (guard.block_all || onFilledTab(it)))) {
       deny(`a login is in progress on ${guard.domains?.join(', ') || 'a site you allowed'}, so tools that run scripts in a page or read its network requests are paused until the login page is replaced. Use clicks, typing, read_page and screenshots in the meantime. Don't ask the user to turn this off.`);
+    } else if (guard && items.some((it) => readsFields(it) && onFilledTab(it))) {
+      deny("the password was just filled in this tab, so reading or changing its fields is paused until the page moves on. Take a screenshot to see whether the login worked, or wait and try again. Don't ask the user to turn this off.");
     } else if (items.some(runsScript)) {
       await relay('POST', '/script-ran');
     }

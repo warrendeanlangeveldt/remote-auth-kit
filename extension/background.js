@@ -20,6 +20,7 @@ const RATE_WINDOW_MS = 15 * 60_000;
 const RATE_MAX = 6; // requests sent to your phone per window
 const MAX_PAUSE_S = 24 * 3600;
 const PAGE_CHECK_EVERY_MS = 6 * 3600_000;
+const FILL_KEEP_MS = 30_000; // longest a password stays in a page whose script handles the submit
 
 let ws = null;
 let connecting = false;
@@ -169,20 +170,19 @@ function pageAgent(mode, values, submit, expect) {
         // Nothing else on the page runs in between, so the field is never
         // readable with the password in it.
         nativeSet.call(pw, '');
-      } else if (pw) {
-        // The site's own script handles the submit and may still read the field,
-        // so give it a moment, then take the password out of the DOM. No input
-        // event: the site already has the value, and an event could reset its
-        // state mid-login.
-        setTimeout(() => { if (pw.isConnected) nativeSet.call(pw, ''); }, 1500);
       }
     }
-    // If a filled password field is still showing later (e.g. wrong password), wipe it fully.
+    // Otherwise the site's own script handles the submit, and it may read the
+    // field only after other work (a bot check, a password calculation), so the
+    // value stays until the page moves on. Scripts can't run in this tab until
+    // the page is replaced (hooks/guard.js), and read_page and screenshots show
+    // password fields as dots. If the page is still here after FILL_KEEP_MS (a
+    // wrong password, say), wipe the field and the site's copy of it.
     setTimeout(() => {
       for (const el of document.querySelectorAll('input[type="password"]')) {
         if (el.value) { nativeSet.call(el, ''); el.dispatchEvent(new Event('input', { bubbles: true })); }
       }
-    }, 8000);
+    }, expect.keepMs);
     return { ok: true, filled };
   }
   return { ok: false, error: 'unknown mode' };
@@ -309,7 +309,7 @@ async function onLoginRequest({ id, domain, fields, note, submit, expires_at, la
   const paused = await pausedUntil();
   if (paused) return relayStatus(id, 'failed', `login requests are paused from the user's phone until ${clock(paused)}. Don't retry before then.`);
   if (!requestAllowed(domain, await allowEntries())) {
-    return relayStatus(id, 'failed', `${domain} is not in the Remote Auth Kit extension's allowed sites`);
+    return relayStatus(id, 'failed', `${domain} is not in the Remote Auth Kit extension's allowed sites. Tell the user to add the login page's exact hostname (for example ${domain}), or *.${domain} for every subdomain, in the extension's options, then call request_login again.`);
   }
   if (Object.keys(await allPending()).length) {
     return relayStatus(id, 'failed', 'another login request is still waiting on the phone; wait for it to finish');
@@ -380,7 +380,7 @@ async function onPhoneSubmit({ id, payload }) {
   try {
     [res] = await chrome.scripting.executeScript({
       target: { tabId: p.tabId, frameIds: [p.frameId] }, func: pageAgent,
-      args: ['fill', clean, p.submit, { host: p.frameHost, lastScriptAt: await lastScriptAt() }],
+      args: ['fill', clean, p.submit, { host: p.frameHost, lastScriptAt: await lastScriptAt(), keepMs: FILL_KEEP_MS }],
     });
   } catch (e) {
     res = { result: { ok: false, error: 'could not run in page: ' + e.message } };

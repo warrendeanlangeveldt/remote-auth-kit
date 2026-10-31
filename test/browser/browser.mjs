@@ -66,6 +66,14 @@ const CLASSIC_PAGE = `<!doctype html><title>Classic Login</title>
   ch.port1.onmessage = () => { if (pw.value) sessionStorage.setItem('saw', '1'); ch.port2.postMessage(0); };
   ch.port2.postMessage(0);
 </script>`;
+// A site whose script runs a bot check before it reads the password field and
+// posts the form, as reCAPTCHA-style logins do.
+const SLOW_PAGE = `<!doctype html><title>Slow Login</title>
+<form method="post" action="/slow-done"><input name="email" value="me@example.com"><input type="password" name="password"><button>Sign in</button></form>
+<script>
+  const form = document.querySelector('form');
+  form.addEventListener('submit', (e) => { e.preventDefault(); setTimeout(() => form.submit(), 3000); });
+</script>`;
 const site = https.createServer(tls, (req, res) => {
   const url = new URL(req.url, 'https://x');
   if (req.method === 'POST' && url.pathname === '/record') {
@@ -82,6 +90,16 @@ const site = https.createServer(tls, (req, res) => {
       res.end('<!doctype html><title>Signed in</title>');
     });
   }
+  if (req.method === 'POST' && url.pathname === '/slow-done') {
+    let b = '';
+    req.on('data', (c) => (b += c));
+    return req.on('end', () => {
+      recorded.push({ slow: new URLSearchParams(b).get('password') });
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end('<!doctype html><title>Signed in</title>');
+    });
+  }
+  if (url.pathname === '/slow') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end(SLOW_PAGE); }
   if (url.pathname === '/classic') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end(CLASSIC_PAGE); }
   if (url.pathname.startsWith('/phone/')) {
     const file = path.join(root, 'phone', url.pathname.slice('/phone/'.length) || 'index.html');
@@ -101,6 +119,7 @@ const SITE_PORT = site.address().port;
 // Pages other than the front tab get no animation frames in headless Chrome, so every wait polls on an interval.
 const LOGIN_URL = `https://login.relay.test:${SITE_PORT}/signin`;
 const CLASSIC_URL = `https://login.relay.test:${SITE_PORT}/classic`;
+const SLOW_URL = `https://login.relay.test:${SITE_PORT}/slow`;
 const APPROVE_URL = `https://phone.approve.test:${SITE_PORT}/phone/`;
 
 const ntfy = await startFakeNtfy({ tls, host: 'ntfy.relay.test' });
@@ -159,9 +178,17 @@ try {
   await options.click('#save');
   await options.waitForFunction(() => document.getElementById('status').textContent === 'connected', { timeout: 15000, polling: 100 });
   assert(true, 'extension connected to the relay started by Claude Code');
+  assert(await options.$eval('#saveMsg', (e) => e.textContent) === 'Saved ✓', 'options page confirms the save');
+  await options.$eval('#approveUrl', (e) => { e.value = 'http://plain.test/'; });
+  await options.click('#save');
+  assert(/^Not saved/.test(await options.$eval('#saveMsg', (e) => e.textContent)), 'options page says when a save is refused');
+  await options.$eval('#approveUrl', (e, v) => { e.value = v; }, APPROVE_URL);
+  await options.click('#save');
+  await sleep(300); // the save reconnects the extension
+  await options.waitForFunction(() => document.getElementById('status').textContent === 'connected', { timeout: 15000, polling: 100 });
 
   const unpaired = await requestLogin({ domain: 'relay.test', fields: ['password'] });
-  assert(unpaired.status === 'failed' && /no phone is paired/.test(unpaired.detail), 'refuses requests until a phone is paired');
+  assert(unpaired.status === 'failed' && /no phone is paired/.test(unpaired.detail), `refuses requests until a phone is paired (${JSON.stringify(unpaired)})`);
 
   await options.click('#showPair');
   await options.waitForFunction(() => document.getElementById('qr').src.startsWith('data:image/gif'), { polling: 100 });
@@ -179,6 +206,21 @@ try {
   assert(!phone.url().includes('pair='), 'phone page removes the key from the address bar');
   await options.waitForFunction(() => document.getElementById('phoneState').textContent === 'Paired ✓', { timeout: 15000, polling: 100 });
   assert(true, 'extension learned the phone is paired');
+
+  // A notification can open the page in another browser (or an app's built-in
+  // one) with storage of its own: pasting the saved link pairs it there too.
+  const other = await browser.createBrowserContext();
+  const otherPhone = await other.newPage();
+  await otherPhone.goto(APPROVE_URL);
+  await otherPhone.waitForFunction(() => document.body.innerText.includes('This browser is not paired'), { polling: 100 });
+  await otherPhone.type('input', 'not a link');
+  await otherPhone.click('button.pair');
+  assert(await otherPhone.evaluate(() => document.body.innerText.includes('That is not a pairing link')), 'pasting something else is refused');
+  await otherPhone.type('input', link);
+  await otherPhone.click('button.pair');
+  await otherPhone.waitForFunction(() => document.body.innerText.includes('Paired ✓'), { polling: 100 });
+  assert(await otherPhone.evaluate(() => !!localStorage.getItem('loginRelayPairing') && !document.querySelector('input')?.value), 'pasting the saved link pairs a browser that opened the page unpaired');
+  await other.close();
 
   // The login tab Claude would have opened in Chrome.
   const tab = await browser.newPage();
@@ -204,8 +246,10 @@ try {
   assert(pw.status === 'filled', `request_login returned filled (${pw.detail})`);
   assert(!pw.text.includes(SECRET.password), 'tool result contains no password');
   assert(recorded.some((r) => r.password === SECRET.password), 'site received the password through its own submit handler');
-  await sleep(2000);
-  assert(await tab.evaluate(() => document.querySelector('[name=password]').value === ''), 'password is gone from the page DOM after submit');
+  // This page stays put after the submit (it asks for a code next), so the
+  // password is wiped once the extension's 30-second limit runs out.
+  await tab.waitForFunction(() => document.querySelector('[name=password]').value === '', { timeout: 35000, polling: 200 });
+  assert(true, 'password is gone from the page DOM when the page stays put');
   await phone.waitForFunction(() => document.body.innerText.includes('Filled ✓'), { polling: 100 });
   assert(true, 'phone shows the fill result');
 
@@ -290,6 +334,14 @@ try {
   await tab.waitForFunction(() => document.title === 'Signed in', { polling: 100 });
   assert(recorded.some((r) => r.classic === SECRET.password), 'site received the password in the form post');
   assert(await tab.evaluate(() => sessionStorage.getItem('saw') === null), 'a script watching the page never saw the password in the field');
+
+  // ---- a site that reads the field seconds after the submit ----
+  await tab.goto(SLOW_URL);
+  const slowCall = requestLogin({ domain: 'relay.test', fields: ['password'] });
+  await approveOnPhone('Password', SECRET.password);
+  assert((await slowCall).status === 'filled', 'slow form filled and submitted');
+  await tab.waitForFunction(() => document.title === 'Signed in', { timeout: 15000, polling: 100 });
+  assert(recorded.some((r) => r.slow === SECRET.password), 'a site that reads the field after a delay still gets the password');
 
   // ---- one request at a time ----
   await tab.goto(LOGIN_URL);
