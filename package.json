@@ -1,0 +1,24 @@
+{
+  "name": "login-relay",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Let Claude request a browser login; you enter the password/OTP on your phone and a companion extension fills it. Claude never receives the values.",
+  "scripts": {
+    "start": "node server/local.js",
+    "start:hosted": "node server/hosted.js",
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/build.mjs --check && node test/e2e.mjs",
+    "test:browser": "node scripts/build.mjs --check && cd test/browser && npm install --no-audit --no-fund && node browser.mjs"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.0",
+    "express": "^4.21.0",
+    "ws": "^8.18.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "qrcode-generator": "2.0.4"
+  }
+}

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https: wss:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+<meta name="theme-color" content="#111418">
+<link rel="manifest" href="manifest.webmanifest">
+<title>Login Relay</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#14171c; --muted:#5d6672; --line:#e3e6ea; --accent:#1f6feb; --danger:#c62828; --ok:#1b7f3b; --warn-bg:#fff4e5; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111418; --card:#1a1e24; --ink:#eef1f4; --muted:#9aa4af; --line:#2a3038; --accent:#4c8dff; --danger:#ff6b6b; --ok:#4cc27a; --warn-bg:#3a2a12; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.45 -apple-system, system-ui, sans-serif; padding: max(16px, env(safe-area-inset-top)) 16px 32px; }
+  h1 { font-size:20px; margin:4px 0 16px; }
+  .muted { color:var(--muted); font-size:14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:14px; }
+  .domain { font-size:22px; font-weight:700; word-break:break-all; }
+  .row { margin:8px 0; font-size:14px; word-break:break-all; }
+  .row b { color:var(--muted); font-weight:600; }
+  label { display:block; font-size:14px; color:var(--muted); margin:12px 0 4px; }
+  input { width:100%; font-size:18px; padding:12px; border-radius:10px; border:1px solid var(--line); background:var(--bg); color:var(--ink); }
+  .btns { display:flex; gap:10px; margin-top:14px; }
+  button { flex:1; font-size:17px; padding:13px; border-radius:10px; border:0; font-weight:600; }
+  .primary { background:var(--accent); color:#fff; }
+  .secondary { background:transparent; color:var(--danger); border:1px solid var(--line); }
+  .plain { background:transparent; color:var(--muted); border:1px solid var(--line); font-size:14px; padding:8px; flex:none; }
+  button:disabled { opacity:.45; }
+  .warn { background:var(--warn-bg); border-radius:10px; padding:10px 12px; font-size:14px; margin:10px 0; }
+  code { font-family: ui-monospace, Menlo, monospace; font-size:13px; word-break:break-all; }
+  .status { margin-top:12px; font-weight:600; }
+  .status.ok { color:var(--ok); } .status.bad { color:var(--danger); }
+  .empty { text-align:center; color:var(--muted); padding:40px 0; }
+  footer { margin-top:24px; }
+</style>
+</head>
+<body>
+  <h1>Login Relay</h1>
+  <div id="app"></div>
+  <footer id="footer"></footer>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

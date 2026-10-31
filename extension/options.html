@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Login Relay</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 16px; min-width: 360px; max-width: 560px; }
+  h3 { margin: 22px 0 6px; }
+  label { display: block; margin: 12px 0 4px; font-weight: 600; }
+  input, textarea { width: 100%; box-sizing: border-box; padding: 8px; font: inherit; }
+  textarea { height: 60px; }
+  button { margin-top: 12px; padding: 8px 16px; font: inherit; }
+  .muted { color: #666; }
+  .warn { color: #a15c00; }
+  .ok { color: #1b7f3b; }
+  code { font-size: 12px; word-break: break-all; }
+  #qr { margin-top: 10px; image-rendering: pixelated; }
+  details { margin-top: 8px; }
+</style>
+</head>
+<body>
+  <h2>Login Relay</h2>
+  <div>Relay: <b id="status">…</b></div>
+
+  <label for="allowedDomains">Allowed domains</label>
+  <textarea id="allowedDomains" placeholder="apple.com, github.com"></textarea>
+  <div class="muted">Logins are only ever filled on these domains (and their subdomains).</div>
+
+  <label for="approveUrl">Phone approval page URL</label>
+  <input id="approveUrl" placeholder="https://warrendeanlangeveldt.github.io/login-relay/ (default)">
+  <div class="muted">Where the static <code>phone/</code> page is published. It must be https.</div>
+
+  <details>
+    <summary>Advanced</summary>
+    <label for="ntfyServer">ntfy server</label>
+    <input id="ntfyServer" placeholder="https://ntfy.sh">
+    <div class="muted">Carries only encrypted messages and a "Claude needs a password for …" push. Self-host ntfy if you prefer.</div>
+
+    <label for="relayUrl">Relay URL</label>
+    <input id="relayUrl" placeholder="ws://127.0.0.1:47823">
+    <div class="muted">Leave empty for Claude Code (the plugin runs the relay on this computer). Set it to your hosted relay to use claude.ai.</div>
+
+    <label for="token">Extension token</label>
+    <input id="token" type="password" placeholder="Only for a hosted relay (EXTENSION_TOKEN)">
+  </details>
+
+  <button id="save">Save</button>
+
+  <h3>Phone</h3>
+  <div id="phoneState"></div>
+  <div id="pairBox" hidden>
+    <div>Scan with your phone's camera to pair. Then save the pairing link somewhere private on your phone (for example, your password manager) so you can re-pair if your browser clears the page's storage.</div>
+    <img id="qr" alt="Pairing QR code">
+    <div><button id="copyLink">Copy pairing link</button></div>
+    <div class="muted" style="margin-top:10px">Then, in the ntfy app on your phone, subscribe to server <code id="ntfyHost"></code> topic <code id="notifyTopic"></code> to get push notifications.</div>
+  </div>
+  <button id="showPair">Pair a phone</button>
+  <button id="reset">Reset pairing</button>
+  <div class="muted">Reset makes a new pairing key; the old phone stops working until it scans the new code.</div>
+
+  <script type="module" src="options.js"></script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "login-relay": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/server/local.js"]
+    }
+  }
+}

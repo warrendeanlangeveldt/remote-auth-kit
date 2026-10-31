@@ -1,0 +1,9 @@
+{
+  "name": "login-relay-browser-test",
+  "private": true,
+  "type": "module",
+  "description": "Runs the real extension and phone page in Chrome for Testing. Kept apart from the plugin so installing the plugin doesn't download a browser.",
+  "dependencies": {
+    "puppeteer": "25.16.0"
+  }
+}

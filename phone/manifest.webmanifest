@@ -1,0 +1,8 @@
+{
+  "name": "Login Relay",
+  "short_name": "Login Relay",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#111418",
+  "theme_color": "#111418"
+}
